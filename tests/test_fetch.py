@@ -41,11 +41,22 @@ def _mock_get(response_data, status_code=200):
 
 
 def test_sums_flexible_group_only():
-    with patch("budget_pace.requests.get", return_value=_mock_get(MOCK_RESPONSE)):
+    # FLEXIBLE_BUDGET=0 → falls through to summing YNAB budgeted amounts
+    with patch("budget_pace.requests.get", return_value=_mock_get(MOCK_RESPONSE)), \
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 0.0):
         assigned, spent = fetch_flexible_totals()
     # (500_000 + 300_000) / 1000 = 800.0
     assert assigned == 800.0
     # (200_000 + 100_000) / 1000 = 300.0
+    assert spent == 300.0
+
+
+def test_flexible_budget_override():
+    # FLEXIBLE_BUDGET > 0 → uses configured value instead of YNAB budgeted
+    with patch("budget_pace.requests.get", return_value=_mock_get(MOCK_RESPONSE)), \
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 1200.0):
+        assigned, spent = fetch_flexible_totals()
+    assert assigned == 1200.0
     assert spent == 300.0
 
 

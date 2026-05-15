@@ -33,8 +33,8 @@ def fetch_flexible_totals() -> tuple[float, float]:
     for group in groups:
         if group["name"] == config.GROUP_NAME:
             cats = group["categories"]
-            assigned = sum(c["budgeted"] for c in cats) / 1000
             spent = sum(-c["activity"] for c in cats) / 1000
+            assigned = config.FLEXIBLE_BUDGET if config.FLEXIBLE_BUDGET > 0 else sum(c["budgeted"] for c in cats) / 1000
             return assigned, spent
 
     raise ValueError(
