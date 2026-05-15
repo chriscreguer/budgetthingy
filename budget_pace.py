@@ -8,7 +8,30 @@ import config
 
 
 def fetch_flexible_totals() -> tuple[float, float]:
-    raise NotImplementedError
+    """Returns (assigned_dollars, spent_dollars) for the Flexible category group."""
+    if not config.API_TOKEN:
+        raise ValueError("YNAB_API_TOKEN is not set in environment or .env")
+    if not config.BUDGET_ID:
+        raise ValueError("YNAB_BUDGET_ID is not set in environment or .env")
+
+    url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/categories"
+    headers = {"Authorization": f"Bearer {config.API_TOKEN}"}
+
+    resp = requests.get(url, headers=headers, timeout=10)
+    resp.raise_for_status()
+
+    groups = resp.json()["data"]["category_groups"]
+    for group in groups:
+        if group["name"] == config.GROUP_NAME:
+            cats = group["categories"]
+            assigned = sum(c["budgeted"] for c in cats) / 1000
+            spent = sum(-c["activity"] for c in cats) / 1000
+            return assigned, spent
+
+    raise ValueError(
+        f"Category group '{config.GROUP_NAME}' not found in budget. "
+        "Check FLEXIBLE_GROUP_NAME in .env."
+    )
 
 
 def calculate_pace(
