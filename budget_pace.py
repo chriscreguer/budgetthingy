@@ -146,7 +146,18 @@ def render_png(
 
 
 def main() -> None:
-    raise NotImplementedError
+    try:
+        assigned, spent = fetch_flexible_totals()
+        pace_ratio, state_label, expected = calculate_pace(assigned, spent)
+        render_png(assigned, spent, expected, pace_ratio, state_label)
+        print(
+            f"{state_label} | pace={pace_ratio:.2f} "
+            f"| ${spent:,.0f} of ${assigned:,.0f} "
+            f"(expected ${expected:,.0f})"
+        )
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
