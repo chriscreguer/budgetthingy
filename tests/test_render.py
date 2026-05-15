@@ -30,6 +30,7 @@ def test_dimensions(tmp_path):
     )
     img = Image.open(out)
     assert img.size == (792, 272)
+    assert img.mode == "L"
 
 
 def test_slow_down_state(tmp_path):
