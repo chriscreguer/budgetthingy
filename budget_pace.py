@@ -1,10 +1,19 @@
 import calendar
+import os
 import sys
 from datetime import date
 
 import requests
 
 import config
+
+_WIDTH = 792
+_HEIGHT = 272
+_HALF = _HEIGHT // 2
+_PAD = 40
+_BAR_H = 30
+_BAR_TOP = _HALF + 36
+_FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "RobotoBold.ttf")
 
 
 def fetch_flexible_totals() -> tuple[float, float]:
@@ -65,6 +74,16 @@ def calculate_pace(
     return pace, label, expected
 
 
+def _fit_font(draw, text: str, max_w: int, max_h: int, max_size: int = 120):
+    from PIL import ImageFont
+    for size in range(max_size, 8, -2):
+        font = ImageFont.truetype(_FONT_PATH, size)
+        bb = draw.textbbox((0, 0), text, font=font)
+        if (bb[2] - bb[0]) <= max_w and (bb[3] - bb[1]) <= max_h:
+            return font
+    return ImageFont.truetype(_FONT_PATH, 10)
+
+
 def render_png(
     assigned: float,
     spent: float,
@@ -73,7 +92,57 @@ def render_png(
     state_label: str,
     output_path: str = "output.png",
 ) -> None:
-    raise NotImplementedError
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("L", (_WIDTH, _HEIGHT), color=255)
+    draw = ImageDraw.Draw(img)
+
+    # --- Top half: auto-scaled state label ---
+    max_w = _WIDTH - 2 * _PAD
+    max_h = _HALF - 20
+    font = _fit_font(draw, state_label, max_w, max_h)
+    bb = draw.textbbox((0, 0), state_label, font=font)
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    tx = (_WIDTH - tw) // 2 - bb[0]
+    ty = (_HALF - th) // 2 - bb[1]
+    draw.text((tx, ty), state_label, fill=0, font=font)
+
+    # --- Bottom half: progress bar ---
+    bar_left = _PAD
+    bar_right = _WIDTH - _PAD
+    bar_width = bar_right - bar_left
+
+    draw.rectangle(
+        [bar_left, _BAR_TOP, bar_right, _BAR_TOP + _BAR_H],
+        outline=0,
+        width=2,
+    )
+
+    if assigned > 0:
+        fill_frac = min(spent / assigned, 1.0)
+        fill_right = bar_left + int(fill_frac * bar_width)
+        if fill_right > bar_left:
+            draw.rectangle(
+                [bar_left, _BAR_TOP, fill_right, _BAR_TOP + _BAR_H],
+                fill=0,
+            )
+
+        tick_frac = min(expected / assigned, 1.0)
+        tick_x = bar_left + int(tick_frac * bar_width)
+        draw.rectangle(
+            [tick_x - 2, _BAR_TOP - 6, tick_x + 2, _BAR_TOP + _BAR_H + 6],
+            fill=0,
+        )
+
+    small_font = ImageFont.truetype(_FONT_PATH, 18)
+    label_text = f"${spent:,.0f} of ${assigned:,.0f}"
+    bb2 = draw.textbbox((0, 0), label_text, font=small_font)
+    lw = bb2[2] - bb2[0]
+    lx = (_WIDTH - lw) // 2 - bb2[0]
+    ly = _BAR_TOP + _BAR_H + 10
+    draw.text((lx, ly), label_text, fill=0, font=small_font)
+
+    img.save(output_path)
 
 
 def main() -> None:
