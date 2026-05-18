@@ -180,7 +180,7 @@ def render_png(
                 )
 
         draw.rectangle(
-            [tick_x - 3, _HALF + 4, tick_x + 3, _HEIGHT - 4],
+            [tick_x - 3, _BAR_TOP - 20, tick_x + 3, _BAR_TOP + _BAR_H + 20],
             fill=p["tick"],
         )
 
