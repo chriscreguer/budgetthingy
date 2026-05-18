@@ -15,6 +15,42 @@ _BAR_H = 30
 _BAR_TOP = _HALF + 36
 _FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "RobotoBold.ttf")
 
+# Color palette definitions for different e-ink display types.
+# Each palette drives mode, background, and per-element colors.
+# "gray4" uses 4 discrete gray levels; "byr" uses black/yellow/red on white (RGB).
+_PALETTES: dict[str, dict] = {
+    "gray4": {
+        "mode": "L",
+        "background": 255,          # white
+        "state_colors": {           # all black — color carries no meaning on gray4
+            "Plenty of Room": 0,
+            "On Track": 0,
+            "Spend Cautiously": 0,
+            "Slow Down": 0,
+        },
+        "bar_outline": 0,           # black
+        "bar_fill": 80,             # dark gray for spent portion
+        "bar_overage": 0,           # black when overspent (same, no color)
+        "tick": 0,                  # black tick
+        "label_text": 100,          # medium gray for secondary dollar label
+    },
+    "byr": {
+        "mode": "RGB",
+        "background": (255, 255, 255),   # white
+        "state_colors": {
+            "Plenty of Room": (0, 0, 0),
+            "On Track": (0, 0, 0),
+            "Spend Cautiously": (180, 120, 0),   # dark amber
+            "Slow Down": (210, 30, 30),           # red
+        },
+        "bar_outline": (0, 0, 0),
+        "bar_fill": (0, 0, 0),               # black for on-pace portion
+        "bar_overage": (210, 30, 30),        # red when overspent
+        "tick": (180, 130, 0),               # amber tick mark
+        "label_text": (0, 0, 0),
+    },
+}
+
 
 def fetch_flexible_totals() -> tuple[float, float]:
     """Returns (assigned_dollars, spent_dollars) for the Flexible category group."""
@@ -91,10 +127,12 @@ def render_png(
     pace_ratio: float,
     state_label: str,
     output_path: str = "output.png",
+    variant: str = "gray4",
 ) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
-    img = Image.new("L", (_WIDTH, _HEIGHT), color=255)
+    p = _PALETTES[variant]
+    img = Image.new(p["mode"], (_WIDTH, _HEIGHT), color=p["background"])
     draw = ImageDraw.Draw(img)
 
     # --- Top half: auto-scaled state label ---
@@ -105,7 +143,7 @@ def render_png(
     tw, th = bb[2] - bb[0], bb[3] - bb[1]
     tx = (_WIDTH - tw) // 2 - bb[0]
     ty = (_HALF - th) // 2 - bb[1]
-    draw.text((tx, ty), state_label, fill=0, font=font)
+    draw.text((tx, ty), state_label, fill=p["state_colors"][state_label], font=font)
 
     # --- Bottom half: progress bar ---
     bar_left = _PAD
@@ -114,24 +152,36 @@ def render_png(
 
     draw.rectangle(
         [bar_left, _BAR_TOP, bar_right, _BAR_TOP + _BAR_H],
-        outline=0,
+        outline=p["bar_outline"],
         width=2,
     )
 
     if assigned > 0:
         fill_frac = min(spent / assigned, 1.0)
         fill_right = bar_left + int(fill_frac * bar_width)
-        if fill_right > bar_left:
-            draw.rectangle(
-                [bar_left, _BAR_TOP, fill_right, _BAR_TOP + _BAR_H],
-                fill=0,
-            )
-
         tick_frac = min(expected / assigned, 1.0)
         tick_x = bar_left + int(tick_frac * bar_width)
+
+        if fill_right > bar_left:
+            if spent <= expected:
+                draw.rectangle(
+                    [bar_left, _BAR_TOP, fill_right, _BAR_TOP + _BAR_H],
+                    fill=p["bar_fill"],
+                )
+            else:
+                # On-pace portion in normal fill color, overage portion in overage color
+                draw.rectangle(
+                    [bar_left, _BAR_TOP, tick_x, _BAR_TOP + _BAR_H],
+                    fill=p["bar_fill"],
+                )
+                draw.rectangle(
+                    [tick_x, _BAR_TOP, fill_right, _BAR_TOP + _BAR_H],
+                    fill=p["bar_overage"],
+                )
+
         draw.rectangle(
             [tick_x - 2, _BAR_TOP - 6, tick_x + 2, _BAR_TOP + _BAR_H + 6],
-            fill=0,
+            fill=p["tick"],
         )
 
     small_font = ImageFont.truetype(_FONT_PATH, 18)
@@ -140,7 +190,7 @@ def render_png(
     lw = bb2[2] - bb2[0]
     lx = (_WIDTH - lw) // 2 - bb2[0]
     ly = _BAR_TOP + _BAR_H + 10
-    draw.text((lx, ly), label_text, fill=0, font=small_font)
+    draw.text((lx, ly), label_text, fill=p["label_text"], font=small_font)
 
     img.save(output_path)
 
@@ -149,7 +199,9 @@ def main() -> None:
     try:
         assigned, spent = fetch_flexible_totals()
         pace_ratio, state_label, expected = calculate_pace(assigned, spent)
-        render_png(assigned, spent, expected, pace_ratio, state_label)
+        for variant, path in [("gray4", "output_gray4.png"), ("byr", "output_byr.png")]:
+            render_png(assigned, spent, expected, pace_ratio, state_label, path, variant)
+            print(f"  → {path}")
         print(
             f"{state_label} | pace={pace_ratio:.2f} "
             f"| ${spent:,.0f} of ${assigned:,.0f} "

@@ -18,7 +18,7 @@ def test_creates_file(tmp_path):
     assert os.path.exists(out)
 
 
-def test_dimensions(tmp_path):
+def test_dimensions_gray4(tmp_path):
     out = str(tmp_path / "out.png")
     render_png(
         assigned=1800.0,
@@ -27,10 +27,27 @@ def test_dimensions(tmp_path):
         pace_ratio=0.8,
         state_label="Plenty of Room",
         output_path=out,
+        variant="gray4",
     )
     img = Image.open(out)
     assert img.size == (792, 272)
     assert img.mode == "L"
+
+
+def test_dimensions_byr(tmp_path):
+    out = str(tmp_path / "out.png")
+    render_png(
+        assigned=1800.0,
+        spent=720.0,
+        expected=900.0,
+        pace_ratio=0.8,
+        state_label="Plenty of Room",
+        output_path=out,
+        variant="byr",
+    )
+    img = Image.open(out)
+    assert img.size == (792, 272)
+    assert img.mode == "RGB"
 
 
 def test_slow_down_state(tmp_path):
