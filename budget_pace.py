@@ -140,8 +140,8 @@ def render_png(
     max_h = _HALF - 20
     font = _fit_font(draw, state_label, max_w, max_h)
     bb = draw.textbbox((0, 0), state_label, font=font)
-    tw, th = bb[2] - bb[0], bb[3] - bb[1]
-    tx = (_WIDTH - tw) // 2 - bb[0]
+    th = bb[3] - bb[1]
+    tx = _PAD - bb[0]
     ty = (_HALF - th) // 2 - bb[1]
     draw.text((tx, ty), state_label, fill=p["state_colors"][state_label], font=font)
 
@@ -180,17 +180,9 @@ def render_png(
                 )
 
         draw.rectangle(
-            [tick_x - 2, _BAR_TOP - 6, tick_x + 2, _BAR_TOP + _BAR_H + 6],
+            [tick_x - 3, _BAR_TOP - 12, tick_x + 3, _BAR_TOP + _BAR_H + 12],
             fill=p["tick"],
         )
-
-    small_font = ImageFont.truetype(_FONT_PATH, 18)
-    label_text = f"${spent:,.0f} of ${assigned:,.0f}"
-    bb2 = draw.textbbox((0, 0), label_text, font=small_font)
-    lw = bb2[2] - bb2[0]
-    lx = (_WIDTH - lw) // 2 - bb2[0]
-    ly = _BAR_TOP + _BAR_H + 10
-    draw.text((lx, ly), label_text, fill=p["label_text"], font=small_font)
 
     img.save(output_path)
 
