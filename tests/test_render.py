@@ -58,7 +58,7 @@ def test_slow_down_state(tmp_path):
         spent=2000.0,
         expected=900.0,
         pace_ratio=2.22,
-        state_label="Slow Down",
+        state_label="Slow down",
         output_path=out,
     )
     assert os.path.exists(out)
@@ -72,7 +72,7 @@ def test_zero_assigned(tmp_path):
         spent=0.0,
         expected=0.0,
         pace_ratio=0.0,
-        state_label="On Track",
+        state_label="On track",
         output_path=out,
     )
     assert os.path.exists(out)

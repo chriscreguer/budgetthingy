@@ -24,9 +24,9 @@ _PALETTES: dict[str, dict] = {
         "background": 255,          # white
         "state_colors": {           # all black — color carries no meaning on gray4
             "Plenty of Room": 0,
-            "On Track": 0,
+            "On track": 0,
             "Spend Cautiously": 0,
-            "Slow Down": 0,
+            "Slow down": 0,
         },
         "bar_outline": 0,           # black
         "bar_fill": 80,             # dark gray for spent portion
@@ -39,9 +39,9 @@ _PALETTES: dict[str, dict] = {
         "background": (255, 255, 255),   # white
         "state_colors": {
             "Plenty of Room": (0, 0, 0),
-            "On Track": (0, 0, 0),
+            "On track": (0, 0, 0),
             "Spend Cautiously": (180, 120, 0),   # dark amber
-            "Slow Down": (210, 30, 30),           # red
+            "Slow down": (210, 30, 30),           # red
         },
         "bar_outline": (0, 0, 0),
         "bar_fill": (0, 0, 0),               # black for on-pace portion
@@ -93,7 +93,7 @@ def calculate_pace(
         days_in_month = calendar.monthrange(today.year, today.month)[1]
 
     if assigned == 0:
-        return 0.0, "On Track", 0.0
+        return 0.0, "On track", 0.0
 
     expected = assigned * (day / days_in_month)
     pace = spent / expected if expected > 0 else 0.0
@@ -101,11 +101,11 @@ def calculate_pace(
     if pace < 0.85:
         label = "Plenty of Room"
     elif pace < 1.10:
-        label = "On Track"
+        label = "On track"
     elif pace < 1.25:
         label = "Spend Cautiously"
     else:
-        label = "Slow Down"
+        label = "Slow down"
 
     return pace, label, expected
 
@@ -135,14 +135,14 @@ def render_png(
     img = Image.new(p["mode"], (_WIDTH, _HEIGHT), color=p["background"])
     draw = ImageDraw.Draw(img)
 
-    # --- Top half: auto-scaled state label ---
+    # --- Top half: auto-scaled state label, biased toward the bar ---
     max_w = _WIDTH - 2 * _PAD
     max_h = _HALF - 20
-    font = _fit_font(draw, state_label, max_w, max_h)
+    font = _fit_font(draw, state_label, max_w, max_h, max_size=96)
     bb = draw.textbbox((0, 0), state_label, font=font)
     th = bb[3] - bb[1]
     tx = _PAD - bb[0]
-    ty = (_HALF - th) // 2 - bb[1]
+    ty = (_HALF - th) // 2 - bb[1] + 16   # shift down toward bar
     draw.text((tx, ty), state_label, fill=p["state_colors"][state_label], font=font)
 
     # --- Bottom half: progress bar ---
@@ -180,7 +180,7 @@ def render_png(
                 )
 
         draw.rectangle(
-            [tick_x - 3, _BAR_TOP - 12, tick_x + 3, _BAR_TOP + _BAR_H + 12],
+            [tick_x - 3, _HALF + 4, tick_x + 3, _HEIGHT - 4],
             fill=p["tick"],
         )
 
