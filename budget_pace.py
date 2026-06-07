@@ -6,6 +6,7 @@ from datetime import date
 import requests
 
 import config
+from convert_image import convert
 
 _WIDTH = 792
 _HEIGHT = 272
@@ -13,7 +14,7 @@ _HALF = _HEIGHT // 2
 _PAD = 40
 _BAR_H = 30
 _BAR_TOP = _HALF + 36
-_FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "RobotoBold.ttf")
+_FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "CrimsonText-Regular.ttf")
 
 # Color palette definitions for different e-ink display types.
 # Each palette drives mode, background, and per-element colors.
@@ -22,15 +23,13 @@ _PALETTES: dict[str, dict] = {
     "gray4": {
         "mode": "L",
         "background": 255,          # white
-        "state_colors": {           # all black — color carries no meaning on gray4
-            "Plenty of Room": 0,
-            "On track": 0,
-            "Spend Cautiously": 0,
+        "state_colors": {
+            "On Track": 0,
             "Slow down": 0,
         },
         "bar_outline": 0,           # black
-        "bar_fill": 80,             # dark gray for spent portion
-        "bar_overage": 0,           # black when overspent (same, no color)
+        "bar_fill": 0,              # black for on-track portion
+        "bar_overage": 170,         # light gray for overage portion
         "tick": 0,                  # black tick
         "label_text": 100,          # medium gray for secondary dollar label
     },
@@ -38,16 +37,50 @@ _PALETTES: dict[str, dict] = {
         "mode": "RGB",
         "background": (255, 255, 255),   # white
         "state_colors": {
-            "Plenty of Room": (0, 0, 0),
-            "On track": (0, 0, 0),
-            "Spend Cautiously": (180, 120, 0),   # dark amber
-            "Slow down": (210, 30, 30),           # red
+            "On Track": (0, 0, 0),
+            "Slow down": (0, 0, 0),
         },
         "bar_outline": (0, 0, 0),
         "bar_fill": (0, 0, 0),               # black for on-pace portion
         "bar_overage": (210, 30, 30),        # red when overspent
-        "tick": (180, 130, 0),               # amber tick mark
+        "tick": (180, 130, 0),               # amber tick mark (maps to panel yellow)
         "label_text": (0, 0, 0),
+        "font_path": "Merriweather-VF.ttf",
+        "font_variation": "Bold",
+        "centered": False,
+        "tick_half_w": 2,
+    },
+    "nyt": {
+        "mode": "RGB",
+        "background": (255, 255, 255),
+        "state_colors": {
+            "On Track": (10, 10, 10),
+            "Slow down": (10, 10, 10),
+        },
+        "bar_outline": (10, 10, 10),
+        "bar_fill": (10, 10, 10),
+        "bar_overage": (148, 28, 28),        # dark editorial red
+        "tick": (10, 10, 10),
+        "label_text": (100, 100, 100),
+        "font_path": "PlayfairDisplay-Bold.ttf",
+        "centered": False,
+        "tick_half_w": 2,
+    },
+    "nyt_gray": {
+        "mode": "L",
+        "background": 255,
+        "state_colors": {
+            "On Track": 0,
+            "Slow down": 0,
+        },
+        "bar_outline": 0,
+        "bar_fill": 0,                       # black for on-track portion
+        "bar_overage": 170,                  # light gray for overage portion
+        "tick": 0,
+        "label_text": 120,
+        "font_path": "PlayfairDisplay-Bold.ttf",
+        "centered": False,
+        "tick_half_w": 2,
     },
 }
 
@@ -98,26 +131,53 @@ def calculate_pace(
     expected = assigned * (day / days_in_month)
     pace = spent / expected if expected > 0 else 0.0
 
-    if pace < 0.85:
-        label = "Plenty of Room"
-    elif pace < 1.10:
-        label = "On track"
-    elif pace < 1.25:
-        label = "Spend Cautiously"
+    if pace <= 1.0:
+        label = "On Track"
     else:
         label = "Slow down"
 
     return pace, label, expected
 
 
-def _fit_font(draw, text: str, max_w: int, max_h: int, max_size: int = 120):
+def _text_width_tracked(draw, text: str, font, tracking: int = 0) -> int:
+    total = 0
+    for i, char in enumerate(text):
+        bb = draw.textbbox((0, 0), char, font=font)
+        total += bb[2] - bb[0]
+        if i < len(text) - 1:
+            total += tracking
+    return total
+
+
+def _draw_text_tracked(draw, pos, text: str, font, fill, tracking: int = 0) -> None:
+    x, y = pos
+    for char in text:
+        draw.text((x, y), char, font=font, fill=fill)
+        bb = draw.textbbox((0, 0), char, font=font)
+        x += (bb[2] - bb[0]) + tracking
+
+
+def _load_font(font_path: str, size: int, variation: str | None = None):
+    """Load a TTF; for variable fonts, select a named instance (e.g. 'Bold')."""
     from PIL import ImageFont
+    font = ImageFont.truetype(font_path, size)
+    if variation:
+        try:
+            font.set_variation_by_name(variation)
+        except (OSError, ValueError):
+            pass  # not a variable font, or instance missing — keep default
+    return font
+
+
+def _fit_font(draw, text: str, max_w: int, max_h: int, tracking: int = 0, max_size: int = 120, font_path: str | None = None, font_variation: str | None = None):
+    fp = font_path or _FONT_PATH
     for size in range(max_size, 8, -2):
-        font = ImageFont.truetype(_FONT_PATH, size)
+        font = _load_font(fp, size, font_variation)
+        w = _text_width_tracked(draw, text, font, tracking)
         bb = draw.textbbox((0, 0), text, font=font)
-        if (bb[2] - bb[0]) <= max_w and (bb[3] - bb[1]) <= max_h:
+        if w <= max_w and (bb[3] - bb[1]) <= max_h:
             return font
-    return ImageFont.truetype(_FONT_PATH, 10)
+    return _load_font(fp, 10, font_variation)
 
 
 def render_png(
@@ -127,34 +187,69 @@ def render_png(
     pace_ratio: float,
     state_label: str,
     output_path: str = "output.png",
-    variant: str = "gray4",
+    variant: str = "nyt",
+    tracking: int = 0,
+    width: int = _WIDTH,
+    height: int = _HEIGHT,
+    max_font_size: int = 96,
 ) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
+    sx = width / _WIDTH
+    sy = height / _HEIGHT
+    half = height // 2
+    pad = int(_PAD * sx)
+    bar_h = int(_BAR_H * sy)
+    bar_top = half + int(36 * sy)
+    tick_ext = int(20 * sy)
+
     p = _PALETTES[variant]
-    img = Image.new(p["mode"], (_WIDTH, _HEIGHT), color=p["background"])
+    fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    fp = os.path.join(fonts_dir, p["font_path"]) if "font_path" in p else _FONT_PATH
+    centered = p.get("centered", False)
+    font_variation = p.get("font_variation")
+    tick_hw = int(p.get("tick_half_w", 3) * sx)
+
+    img = Image.new(p["mode"], (width, height), color=p["background"])
     draw = ImageDraw.Draw(img)
 
-    # --- Top half: auto-scaled state label, biased toward the bar ---
-    max_w = _WIDTH - 2 * _PAD
-    max_h = _HALF - 20
-    font = _fit_font(draw, state_label, max_w, max_h, max_size=96)
+    # --- Optional kicker line above the label ---
+    label_top = 0
+    if "kicker" in p:
+        kicker_size = int(13 * sy)
+        kicker_font = _load_font(fp, kicker_size, font_variation)
+        kicker_tracking = int(4 * sx)
+        kw = _text_width_tracked(draw, p["kicker"], kicker_font, kicker_tracking)
+        kx = (width - kw) // 2
+        ky = int(18 * sy)
+        _draw_text_tracked(draw, (kx, ky), p["kicker"], font=kicker_font, fill=p["label_text"], tracking=kicker_tracking)
+        label_top = ky + int(18 * sy)
+
+    # --- Optional thin rule at the half-way divider ---
+    if "rule_color" in p:
+        draw.line([(0, half), (width, half)], fill=p["rule_color"], width=1)
+
+    # --- Top half: auto-scaled state label ---
+    max_w = width - 2 * pad
+    max_h = half - label_top - 10
+    font = _fit_font(draw, state_label, max_w, max_h, tracking=tracking, max_size=max_font_size, font_path=fp, font_variation=font_variation)
     bb = draw.textbbox((0, 0), state_label, font=font)
+    tw = _text_width_tracked(draw, state_label, font, tracking)
     th = bb[3] - bb[1]
-    tx = _PAD - bb[0]
-    ty = (_HALF - th) // 2 - bb[1] + 16   # shift down toward bar
-    draw.text((tx, ty), state_label, fill=p["state_colors"][state_label], font=font)
+    if centered:
+        label_area_h = half - label_top
+        ty = label_top + (label_area_h - th) // 2 - bb[1]
+        tx = (width - tw) // 2 - bb[0]
+    else:
+        # Anchor from bar so gap stays consistent regardless of canvas height
+        ty = bar_top - int(40 * sx) - th - bb[1]
+        tx = pad - bb[0]
+    _draw_text_tracked(draw, (tx, ty), state_label, font=font, fill=p["state_colors"][state_label], tracking=tracking)
 
     # --- Bottom half: progress bar ---
-    bar_left = _PAD
-    bar_right = _WIDTH - _PAD
+    bar_left = pad
+    bar_right = width - pad
     bar_width = bar_right - bar_left
-
-    draw.rectangle(
-        [bar_left, _BAR_TOP, bar_right, _BAR_TOP + _BAR_H],
-        outline=p["bar_outline"],
-        width=2,
-    )
 
     if assigned > 0:
         fill_frac = min(spent / assigned, 1.0)
@@ -165,35 +260,62 @@ def render_png(
         if fill_right > bar_left:
             if spent <= expected:
                 draw.rectangle(
-                    [bar_left, _BAR_TOP, fill_right, _BAR_TOP + _BAR_H],
+                    [bar_left, bar_top, fill_right, bar_top + bar_h],
                     fill=p["bar_fill"],
                 )
             else:
-                # On-pace portion in normal fill color, overage portion in overage color
                 draw.rectangle(
-                    [bar_left, _BAR_TOP, tick_x, _BAR_TOP + _BAR_H],
+                    [bar_left, bar_top, tick_x, bar_top + bar_h],
                     fill=p["bar_fill"],
                 )
                 draw.rectangle(
-                    [tick_x, _BAR_TOP, fill_right, _BAR_TOP + _BAR_H],
+                    [tick_x, bar_top, fill_right, bar_top + bar_h],
                     fill=p["bar_overage"],
                 )
 
         draw.rectangle(
-            [tick_x - 3, _BAR_TOP - 20, tick_x + 3, _BAR_TOP + _BAR_H + 20],
+            [tick_x - tick_hw, bar_top - tick_ext, tick_x + tick_hw, bar_top + bar_h + tick_ext],
             fill=p["tick"],
         )
+
+    # Draw outline last so it sits above the fill
+    draw.rectangle(
+        [bar_left, bar_top, bar_right, bar_top + bar_h],
+        outline=p["bar_outline"],
+        width=2,
+    )
 
     img.save(output_path)
 
 
+# The palette shipped to the ESP32 — its PNG is converted to budget.bin.
+SHIP_VARIANT = "byr"
+# Preview-only palettes rendered for visual comparison (skipped with --bin-only).
+PREVIEW_VARIANTS = [("nyt", "output_nyt.png"), ("nyt_gray", "output_nyt_gray.png")]
+
+
 def main() -> None:
+    bin_only = "--bin-only" in sys.argv
+    out_dir = os.path.dirname(os.path.abspath(__file__))
+    ship_png = os.path.join(out_dir, f"output_{SHIP_VARIANT}.png")
+    bin_path = os.path.join(out_dir, "budget.bin")
+
     try:
         assigned, spent = fetch_flexible_totals()
         pace_ratio, state_label, expected = calculate_pace(assigned, spent)
-        for variant, path in [("gray4", "output_gray4.png"), ("byr", "output_byr.png")]:
-            render_png(assigned, spent, expected, pace_ratio, state_label, path, variant)
-            print(f"  → {path}")
+
+        if not bin_only:
+            for variant, fname in PREVIEW_VARIANTS:
+                path = os.path.join(out_dir, fname)
+                render_png(assigned, spent, expected, pace_ratio, state_label, path, variant, tracking=-3)
+                print(f"  → {path} ({os.path.getsize(path):,} bytes)")
+
+        # Shipping variant: render PNG, then pack it into budget.bin for the ESP32.
+        render_png(assigned, spent, expected, pace_ratio, state_label, ship_png, SHIP_VARIANT, tracking=-3)
+        print(f"  → {ship_png} ({os.path.getsize(ship_png):,} bytes)")
+        n = convert(ship_png, bin_path)
+        print(f"  → {bin_path} ({n:,} bytes)")
+
         print(
             f"{state_label} | pace={pace_ratio:.2f} "
             f"| ${spent:,.0f} of ${assigned:,.0f} "
