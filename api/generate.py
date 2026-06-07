@@ -1,10 +1,6 @@
-import asyncio
-import json
 import os
 import sys
 import tempfile
-import traceback
-from http.server import BaseHTTPRequestHandler
 
 from vercel.blob import AsyncBlobClient
 
@@ -64,28 +60,3 @@ async def _generate_and_upload() -> dict:
         "expected": expected,
         "blob": dict(uploaded),
     }
-
-
-class handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        try:
-            payload = asyncio.run(_generate_and_upload())
-            body = json.dumps(payload).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        except Exception as exc:
-            body = json.dumps(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                    "traceback": traceback.format_exc(),
-                }
-            ).encode("utf-8")
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
