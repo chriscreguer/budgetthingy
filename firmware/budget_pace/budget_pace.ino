@@ -20,7 +20,7 @@
 // --- Config -----------------------------------------------------------------
 #define WIFI_SSID      "Costanza"
 #define WIFI_PASSWORD  "serenitynow"
-#define IMAGE_URL      "http://192.168.0.240:8000/budget.bin"
+#define IMAGE_URL      "https://budgetthingy.vercel.app/api/display"
 #define SLEEP_HOURS    24
 // ----------------------------------------------------------------------------
 

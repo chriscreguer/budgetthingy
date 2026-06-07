@@ -1,75 +1,61 @@
 # Budget Display
 
-A fullscreen budget-pace dashboard designed to run on a Raspberry Pi connected to a small display. Shows whether you're spending too fast, on track, or have room to spend this month.
+Server-rendered budget pace image for a Waveshare 5.79" e-paper display.
 
-## Running locally
+The ESP32 fetches one binary frame from Vercel:
+
+```text
+https://budgetthingy.vercel.app/api/display
+```
+
+That request does the whole job:
+
+1. Fetch flexible-spending totals from YNAB.
+2. Render the 792x272 image with Pillow.
+3. Convert it to the 53,856-byte e-paper buffer.
+4. Return those bytes directly to the ESP32.
+
+There is no Vercel Blob store in the request path.
+
+## Vercel Environment Variables
+
+Set these on the Vercel project:
+
+```text
+YNAB_API_TOKEN=...
+YNAB_BUDGET_ID=...
+FLEXIBLE_GROUP_NAME=Flexible
+```
+
+Optional:
+
+```text
+FLEXIBLE_BUDGET=0
+```
+
+When `FLEXIBLE_BUDGET` is greater than zero, that fixed amount is used instead of summing the YNAB category group budgeted amounts.
+
+## Endpoints
+
+```text
+GET /api/display
+```
+
+Returns `application/octet-stream`, exactly 53,856 bytes, for the firmware.
+
+```text
+GET /api/generate
+```
+
+Returns JSON metadata for debugging the same generated frame:
+
+```json
+{"ok": true, "path": "budget.bin", "bytes": 53856}
+```
+
+## Local Checks
 
 ```bash
-npm install
-npm run dev
+python -m pytest -q
+python -m py_compile api/index.py api/generate.py api/display.py
 ```
-
-This starts both servers concurrently:
-
-- **Client** — Vite dev server at `http://localhost:5173`
-- **Server** — Express API at `http://localhost:3001`
-
-To run them separately:
-
-```bash
-npm run dev:client   # Vite frontend only
-npm run dev:server   # Express backend only
-```
-
-## Project structure
-
-```
-budget-display/
-├── client/          # React + TypeScript + Vite frontend
-│   └── src/
-│       ├── App.tsx  # Main display component
-│       └── App.css  # All styles (preserves original design)
-├── server/          # Express backend
-│   └── src/
-│       ├── index.ts               # Server entry point
-│       ├── routes/budget.ts       # GET /api/budget-status
-│       └── services/
-│           ├── budgetCalculator.ts  # Calculation logic (edit mock inputs here)
-│           └── ynab.ts              # Future YNAB integration stub
-└── shared/
-    └── types/budget.ts  # Shared BudgetStatus type
-```
-
-## Mock data
-
-Mock inputs live in `server/src/routes/budget.ts`:
-
-```ts
-const MOCK_INPUT = {
-  monthlyBudget: 1800,
-  spent: 720,
-};
-```
-
-The backend calculates `expected`, `difference`, `spentProgress`, `expectedProgress`, and `status` from these values using today's date. To simulate different states, change `spent` here.
-
-## YNAB integration
-
-When ready to connect real data:
-
-1. Add your credentials to `.env` (see `.env.example`)
-2. Implement `getYnabBudgetStatus()` in `server/src/services/ynab.ts`
-3. Replace the `MOCK_INPUT` call in `server/src/routes/budget.ts` with `await getYnabBudgetStatus()`
-
-The `/api/budget-status` response shape is stable — the frontend won't need changes.
-
-## Running on Raspberry Pi
-
-Eventually this will run in kiosk mode on a Pi connected to a small display:
-
-1. Build the frontend: `npm run build` (outputs to `dist/client/`)
-2. Run the Express server in production: `node server/src/index.js` (after `npm run build:server`)
-3. Serve `dist/client/` as static files from Express (add a `express.static` route)
-4. Launch Chromium in kiosk mode pointing at `http://localhost:3001`
-
-A helper script and systemd service file can be added here when the Pi setup is finalized.

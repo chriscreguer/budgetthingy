@@ -1,26 +1,25 @@
-import asyncio
 import json
 import traceback
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 from api.display import _load_budget_bin
-from api.generate import _generate_and_upload
+from api.generate import _generate_summary
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
         if path == "/api/generate":
-            self._generate(self.headers.get("x-vercel-oidc-token"))
+            self._generate()
         elif path == "/api/display":
-            self._display(self.headers.get("x-vercel-oidc-token"))
+            self._display()
         else:
             self._send(404, b"not found", "text/plain")
 
-    def _generate(self, blob_token: str | None) -> None:
+    def _generate(self) -> None:
         try:
-            payload = asyncio.run(_generate_and_upload(blob_token))
+            payload = _generate_summary()
             body = json.dumps(payload).encode("utf-8")
             self._send(200, body, "application/json")
         except Exception as exc:
@@ -33,17 +32,9 @@ class handler(BaseHTTPRequestHandler):
             ).encode("utf-8")
             self._send(500, body, "application/json")
 
-    def _display(self, blob_token: str | None) -> None:
+    def _display(self) -> None:
         try:
-            body = asyncio.run(_load_budget_bin(blob_token))
-            if body is None:
-                self._send(
-                    404,
-                    b"budget.bin has not been generated yet",
-                    "text/plain",
-                )
-                return
-
+            body = _load_budget_bin()
             self._send(
                 200,
                 body,
