@@ -31,10 +31,13 @@ Optional:
 
 ```text
 EXCLUDED_GROUP_NAMES=Fixed,Internal Master Category,Credit Card Payments
+EXCLUDED_PAYEE_PATTERNS=Withdrawal
 FLEXIBLE_BUDGET=0
 ```
 
 By default, the display counts every visible YNAB category group except `Fixed`, `Internal Master Category`, and `Credit Card Payments`. Set `EXCLUDED_GROUP_NAMES` if your fixed-cost group has a different name or you want to exclude more groups.
+
+Use `EXCLUDED_PAYEE_PATTERNS` for bank/card movement that YNAB imports as a normal transaction instead of a transfer. Matching is case-insensitive substring matching, so `Withdrawal` excludes payees like `Withdrawal`.
 
 When `FLEXIBLE_BUDGET` is greater than zero, that fixed amount is used instead of summing the included YNAB budgeted amounts.
 

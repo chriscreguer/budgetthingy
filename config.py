@@ -12,4 +12,9 @@ EXCLUDED_GROUP_NAMES: set[str] = {
     for name in os.environ.get("EXCLUDED_GROUP_NAMES", _DEFAULT_EXCLUDED_GROUPS).split(",")
     if name.strip()
 }
+EXCLUDED_PAYEE_PATTERNS: tuple[str, ...] = tuple(
+    pattern.strip().casefold()
+    for pattern in os.environ.get("EXCLUDED_PAYEE_PATTERNS", "").split(",")
+    if pattern.strip()
+)
 FLEXIBLE_BUDGET: float = float(os.environ.get("FLEXIBLE_BUDGET", "0"))

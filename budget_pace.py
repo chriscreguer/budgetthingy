@@ -1,7 +1,7 @@
 import calendar
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 
 import requests
 
@@ -85,6 +85,20 @@ _PALETTES: dict[str, dict] = {
 }
 
 
+def _milliunits_to_dollars(amount: int) -> float:
+    return amount / 1000
+
+
+def _is_current_month(transaction: dict, today: date) -> bool:
+    transaction_date = datetime.strptime(transaction["date"], "%Y-%m-%d").date()
+    return transaction_date.year == today.year and transaction_date.month == today.month
+
+
+def _is_excluded_payee(transaction: dict) -> bool:
+    payee_name = (transaction.get("payee_name") or "").casefold()
+    return any(pattern in payee_name for pattern in config.EXCLUDED_PAYEE_PATTERNS)
+
+
 def fetch_flexible_totals() -> tuple[float, float]:
     """Returns (assigned_dollars, spent_dollars) for non-fixed budget groups."""
     if not config.API_TOKEN:
@@ -95,13 +109,19 @@ def fetch_flexible_totals() -> tuple[float, float]:
     url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/categories"
     headers = {"Authorization": f"Bearer {config.API_TOKEN}"}
 
-    resp = requests.get(url, headers=headers, timeout=10)
-    resp.raise_for_status()
+    categories_resp = requests.get(url, headers=headers, timeout=10)
+    categories_resp.raise_for_status()
 
-    groups = resp.json()["data"]["category_groups"]
+    groups = categories_resp.json()["data"]["category_groups"]
     included_categories = []
+    excluded_category_ids = set()
     for group in groups:
         if group["name"] in config.EXCLUDED_GROUP_NAMES:
+            excluded_category_ids.update(
+                category["id"]
+                for category in group["categories"]
+                if category.get("id")
+            )
             continue
         if group.get("hidden") or group.get("deleted"):
             continue
@@ -115,11 +135,47 @@ def fetch_flexible_totals() -> tuple[float, float]:
         excluded = ", ".join(sorted(config.EXCLUDED_GROUP_NAMES))
         raise ValueError(f"No included YNAB categories found. Excluded groups: {excluded}")
 
-    spent = sum(max(0, -c["activity"]) for c in included_categories) / 1000
+    today = date.today()
+    since_date = today.replace(day=1).isoformat()
+    transactions_url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/transactions"
+    transactions_resp = requests.get(
+        transactions_url,
+        headers=headers,
+        params={"since_date": since_date},
+        timeout=10,
+    )
+    transactions_resp.raise_for_status()
+
+    spent_milliunits = 0
+    transactions = transactions_resp.json()["data"]["transactions"]
+    for transaction in transactions:
+        if transaction.get("deleted") or not _is_current_month(transaction, today):
+            continue
+        if _is_excluded_payee(transaction):
+            continue
+        if transaction.get("transfer_account_id"):
+            continue
+        if transaction.get("category_id") in excluded_category_ids:
+            continue
+
+        subtransactions = transaction.get("subtransactions") or []
+        if subtransactions:
+            for subtransaction in subtransactions:
+                if subtransaction.get("deleted"):
+                    continue
+                if subtransaction.get("transfer_account_id"):
+                    continue
+                if subtransaction.get("category_id") in excluded_category_ids:
+                    continue
+                spent_milliunits += max(0, -subtransaction["amount"])
+        else:
+            spent_milliunits += max(0, -transaction["amount"])
+
+    spent = _milliunits_to_dollars(spent_milliunits)
     assigned = (
         config.FLEXIBLE_BUDGET
         if config.FLEXIBLE_BUDGET > 0
-        else sum(c["budgeted"] for c in included_categories) / 1000
+        else _milliunits_to_dollars(sum(c["budgeted"] for c in included_categories))
     )
     return assigned, spent
 
