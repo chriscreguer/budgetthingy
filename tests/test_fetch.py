@@ -22,6 +22,13 @@ MOCK_RESPONSE = {
                 ],
             },
             {
+                "name": "Quality of Life",
+                "categories": [
+                    {"budgeted": 100_000, "activity": -50_000},
+                    {"budgeted": 25_000, "activity": 5_000},
+                ],
+            },
+            {
                 "name": "Fixed",
                 "categories": [
                     {"budgeted": 1_000_000, "activity": -1_000_000},
@@ -40,24 +47,27 @@ def _mock_get(response_data, status_code=200):
     return mock
 
 
-def test_sums_flexible_group_only():
-    # FLEXIBLE_BUDGET=0 → falls through to summing YNAB budgeted amounts
+def test_sums_non_fixed_groups_only():
+    # FLEXIBLE_BUDGET=0 → falls through to summing included YNAB budgeted amounts
     with patch("budget_pace.requests.get", return_value=_mock_get(MOCK_RESPONSE)), \
-         patch("budget_pace.config.FLEXIBLE_BUDGET", 0.0):
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 0.0), \
+         patch("budget_pace.config.EXCLUDED_GROUP_NAMES", {"Fixed", "Internal Master Category"}):
         assigned, spent = fetch_flexible_totals()
-    # (500_000 + 300_000) / 1000 = 800.0
-    assert assigned == 800.0
-    # (200_000 + 100_000) / 1000 = 300.0
-    assert spent == 300.0
+    # (500_000 + 300_000 + 100_000 + 25_000) / 1000 = 925.0
+    assert assigned == 925.0
+    # (200_000 + 100_000 + 50_000) / 1000 = 350.0
+    # Positive activity is ignored because it is not spending.
+    assert spent == 350.0
 
 
 def test_flexible_budget_override():
     # FLEXIBLE_BUDGET > 0 → uses configured value instead of YNAB budgeted
     with patch("budget_pace.requests.get", return_value=_mock_get(MOCK_RESPONSE)), \
-         patch("budget_pace.config.FLEXIBLE_BUDGET", 1200.0):
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 1200.0), \
+         patch("budget_pace.config.EXCLUDED_GROUP_NAMES", {"Fixed", "Internal Master Category"}):
         assigned, spent = fetch_flexible_totals()
     assert assigned == 1200.0
-    assert spent == 300.0
+    assert spent == 350.0
 
 
 def test_uses_correct_url_and_headers():
@@ -70,10 +80,10 @@ def test_uses_correct_url_and_headers():
     assert call_args[1]["headers"]["Authorization"] == "Bearer tok-abc"
 
 
-def test_raises_on_missing_group():
+def test_raises_when_no_categories_are_included():
     bad_response = {"data": {"category_groups": [{"name": "Fixed", "categories": []}]}}
     with patch("budget_pace.requests.get", return_value=_mock_get(bad_response)):
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(ValueError, match="No included YNAB categories"):
             fetch_flexible_totals()
 
 

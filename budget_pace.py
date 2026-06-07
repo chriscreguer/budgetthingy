@@ -86,7 +86,7 @@ _PALETTES: dict[str, dict] = {
 
 
 def fetch_flexible_totals() -> tuple[float, float]:
-    """Returns (assigned_dollars, spent_dollars) for the Flexible category group."""
+    """Returns (assigned_dollars, spent_dollars) for non-fixed budget groups."""
     if not config.API_TOKEN:
         raise ValueError("YNAB_API_TOKEN is not set in environment or .env")
     if not config.BUDGET_ID:
@@ -99,17 +99,29 @@ def fetch_flexible_totals() -> tuple[float, float]:
     resp.raise_for_status()
 
     groups = resp.json()["data"]["category_groups"]
+    included_categories = []
     for group in groups:
-        if group["name"] == config.GROUP_NAME:
-            cats = group["categories"]
-            spent = sum(-c["activity"] for c in cats) / 1000
-            assigned = config.FLEXIBLE_BUDGET if config.FLEXIBLE_BUDGET > 0 else sum(c["budgeted"] for c in cats) / 1000
-            return assigned, spent
+        if group["name"] in config.EXCLUDED_GROUP_NAMES:
+            continue
+        if group.get("hidden") or group.get("deleted"):
+            continue
+        included_categories.extend(
+            category
+            for category in group["categories"]
+            if not category.get("hidden") and not category.get("deleted")
+        )
 
-    raise ValueError(
-        f"Category group '{config.GROUP_NAME}' not found in budget. "
-        "Check FLEXIBLE_GROUP_NAME in .env."
+    if not included_categories:
+        excluded = ", ".join(sorted(config.EXCLUDED_GROUP_NAMES))
+        raise ValueError(f"No included YNAB categories found. Excluded groups: {excluded}")
+
+    spent = sum(max(0, -c["activity"]) for c in included_categories) / 1000
+    assigned = (
+        config.FLEXIBLE_BUDGET
+        if config.FLEXIBLE_BUDGET > 0
+        else sum(c["budgeted"] for c in included_categories) / 1000
     )
+    return assigned, spent
 
 
 def calculate_pace(

@@ -10,7 +10,7 @@ https://budgetthingy.vercel.app/api/display
 
 That request does the whole job:
 
-1. Fetch flexible-spending totals from YNAB.
+1. Fetch non-fixed spending totals from YNAB.
 2. Render the 792x272 image with Pillow.
 3. Convert it to the 53,856-byte e-paper buffer.
 4. Return those bytes directly to the ESP32.
@@ -24,16 +24,19 @@ Set these on the Vercel project:
 ```text
 YNAB_API_TOKEN=...
 YNAB_BUDGET_ID=...
-FLEXIBLE_GROUP_NAME=Flexible
+FIXED_GROUP_NAME=Fixed
 ```
 
 Optional:
 
 ```text
+EXCLUDED_GROUP_NAMES=Fixed,Internal Master Category,Credit Card Payments
 FLEXIBLE_BUDGET=0
 ```
 
-When `FLEXIBLE_BUDGET` is greater than zero, that fixed amount is used instead of summing the YNAB category group budgeted amounts.
+By default, the display counts every visible YNAB category group except `Fixed`, `Internal Master Category`, and `Credit Card Payments`. Set `EXCLUDED_GROUP_NAMES` if your fixed-cost group has a different name or you want to exclude more groups.
+
+When `FLEXIBLE_BUDGET` is greater than zero, that fixed amount is used instead of summing the included YNAB budgeted amounts.
 
 ## Endpoints
 
