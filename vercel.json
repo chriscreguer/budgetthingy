@@ -4,13 +4,5 @@
       "path": "/api/generate",
       "schedule": "0 10 * * *"
     }
-  ],
-  "functions": {
-    "api/generate.py": {
-      "maxDuration": 60
-    },
-    "api/display.py": {
-      "maxDuration": 30
-    }
-  }
+  ]
 }
