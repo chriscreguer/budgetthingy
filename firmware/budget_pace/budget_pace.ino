@@ -11,6 +11,7 @@
  * Libraries: built-in arduino-esp32 only (WiFi, HTTPClient, SPI, esp_sleep).
  */
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <SPI.h>
 #include <esp_sleep.h>
@@ -66,8 +67,11 @@ static bool connectWiFi() {
 // GET IMAGE_URL into `buffer`. Requires exactly EXPECTED_SIZE bytes.
 // Returns true only if the full frame was received.
 static bool fetchImage(uint8_t *buffer) {
+  WiFiClientSecure client;
+  client.setInsecure();
+
   HTTPClient http;
-  http.begin(IMAGE_URL);
+  http.begin(client, IMAGE_URL);
 
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
