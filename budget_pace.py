@@ -126,7 +126,7 @@ def calculate_pace(
         days_in_month = calendar.monthrange(today.year, today.month)[1]
 
     if assigned == 0:
-        return 0.0, "On track", 0.0
+        return 0.0, "On Track", 0.0
 
     expected = assigned * (day / days_in_month)
     pace = spent / expected if expected > 0 else 0.0

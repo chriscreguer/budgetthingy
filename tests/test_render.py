@@ -12,7 +12,7 @@ def test_creates_file(tmp_path):
         spent=720.0,
         expected=900.0,
         pace_ratio=0.8,
-        state_label="Plenty of Room",
+        state_label="On Track",
         output_path=out,
     )
     assert os.path.exists(out)
@@ -25,7 +25,7 @@ def test_dimensions_gray4(tmp_path):
         spent=720.0,
         expected=900.0,
         pace_ratio=0.8,
-        state_label="Plenty of Room",
+        state_label="On Track",
         output_path=out,
         variant="gray4",
     )
@@ -41,7 +41,7 @@ def test_dimensions_byr(tmp_path):
         spent=720.0,
         expected=900.0,
         pace_ratio=0.8,
-        state_label="Plenty of Room",
+        state_label="On Track",
         output_path=out,
         variant="byr",
     )
@@ -72,7 +72,7 @@ def test_zero_assigned(tmp_path):
         spent=0.0,
         expected=0.0,
         pace_ratio=0.0,
-        state_label="On track",
+        state_label="On Track",
         output_path=out,
     )
     assert os.path.exists(out)
