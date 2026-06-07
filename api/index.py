@@ -12,15 +12,15 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
         if path == "/api/generate":
-            self._generate()
+            self._generate(self.headers.get("x-vercel-oidc-token"))
         elif path == "/api/display":
-            self._display()
+            self._display(self.headers.get("x-vercel-oidc-token"))
         else:
             self._send(404, b"not found", "text/plain")
 
-    def _generate(self) -> None:
+    def _generate(self, blob_token: str | None) -> None:
         try:
-            payload = asyncio.run(_generate_and_upload())
+            payload = asyncio.run(_generate_and_upload(blob_token))
             body = json.dumps(payload).encode("utf-8")
             self._send(200, body, "application/json")
         except Exception as exc:
@@ -33,9 +33,9 @@ class handler(BaseHTTPRequestHandler):
             ).encode("utf-8")
             self._send(500, body, "application/json")
 
-    def _display(self) -> None:
+    def _display(self, blob_token: str | None) -> None:
         try:
-            body = asyncio.run(_load_budget_bin())
+            body = asyncio.run(_load_budget_bin(blob_token))
             if body is None:
                 self._send(
                     404,

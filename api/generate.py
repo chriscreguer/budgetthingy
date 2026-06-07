@@ -15,7 +15,7 @@ BLOB_PATH = "budget.bin"
 BLOB_ACCESS = "private"
 
 
-async def _generate_and_upload() -> dict:
+async def _generate_and_upload(blob_token: str | None = None) -> dict:
     assigned, spent = fetch_flexible_totals()
     pace_ratio, state_label, expected = calculate_pace(assigned, spent)
 
@@ -38,7 +38,7 @@ async def _generate_and_upload() -> dict:
         with open(bin_path, "rb") as f:
             data = f.read()
 
-    client = AsyncBlobClient()
+    client = AsyncBlobClient(token=blob_token)
     uploaded = await client.put(
         BLOB_PATH,
         data,

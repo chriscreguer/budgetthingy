@@ -11,8 +11,8 @@ BLOB_PATH = "budget.bin"
 BLOB_ACCESS = "private"
 
 
-async def _load_budget_bin() -> bytes | None:
-    client = AsyncBlobClient()
+async def _load_budget_bin(blob_token: str | None = None) -> bytes | None:
+    client = AsyncBlobClient(token=blob_token)
     result = await client.get(BLOB_PATH, access=BLOB_ACCESS)
     if result is None or result.status_code != 200 or result.stream is None:
         return None
