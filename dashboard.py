@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PORT = int(os.environ.get("BUDGET_DASHBOARD_PORT", "8765"))
 PUBLIC_ASSETS = {
     "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
-    "/ios-icon.png": ("ios icon.png", "image/png"),
+    "/ios-icon.png": ("ios-icon.png", "image/png"),
     "/icon-192.png": ("icon-192.png", "image/png"),
     "/icon-512.png": ("icon-512.png", "image/png"),
     "/app-preview.png": ("app-preview.png", "image/png"),
@@ -92,8 +92,8 @@ HTML = """<!doctype html>
   <meta property="og:title" content="Budget Dashboard">
   <meta property="og:description" content="Month-to-date budget pace and card spending dashboard.">
   <meta property="og:image" content="/app-preview.png">
-  <link rel="apple-touch-icon" sizes="1024x1024" href="/ios-icon.png">
-  <link rel="apple-touch-icon" href="/ios-icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
   <style>
@@ -422,6 +422,18 @@ HTML = """<!doctype html>
       border-color: var(--text);
       color: var(--bg);
     }
+    .decision-control {
+      display: inline-flex;
+      align-items: center;
+    }
+    .decision-select {
+      display: none;
+      width: 86px;
+      height: 30px;
+      padding: 0 26px 0 9px;
+      font-size: 12px;
+      font-weight: 700;
+    }
     .side-list {
       padding: 8px 12px 12px;
     }
@@ -619,14 +631,12 @@ HTML = """<!doctype html>
         line-height: 1.25;
       }
       td[data-label="Status"] {
+        display: none;
+      }
+      td[data-label="Decision"] {
         grid-column: 2;
         grid-row: 3;
         justify-self: end;
-      }
-      td[data-label="Decision"] {
-        grid-column: 1 / -1;
-        grid-row: 5;
-        margin-top: 1px;
       }
       td[data-label="Date"]::before,
       td[data-label="Amount"]::before,
@@ -654,7 +664,15 @@ HTML = """<!doctype html>
       }
       .clearance { font-size: 11px; }
       td.empty { display: none; }
-      .segmented { width: 100%; }
+      .decision-control .segmented {
+        display: none;
+      }
+      .decision-select {
+        display: block;
+        width: 82px;
+        height: 28px;
+        padding: 0 24px 0 8px;
+      }
       .segmented button {
         flex: 1;
         min-width: 0;
@@ -860,6 +878,35 @@ HTML = """<!doctype html>
       return button;
     }
 
+    function decisionSelect(row) {
+      const select = document.createElement("select");
+      select.className = "decision-select";
+      select.setAttribute("aria-label", `Decision for ${row.payee}`);
+      for (const [value, label] of [["auto", "Auto"], ["include", "In"], ["exclude", "Out"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        select.append(option);
+      }
+      select.value = row.decision || "auto";
+      select.addEventListener("change", () => setDecision(row.line_id, select.value));
+      return select;
+    }
+
+    function decisionControl(row) {
+      const control = document.createElement("div");
+      control.className = "decision-control";
+      const segmented = document.createElement("div");
+      segmented.className = "segmented";
+      segmented.append(
+        decisionButton(row, "auto", "Auto"),
+        decisionButton(row, "include", "In"),
+        decisionButton(row, "exclude", "Out")
+      );
+      control.append(segmented, decisionSelect(row));
+      return control;
+    }
+
     function renderTransactions() {
       els.transactionBody.replaceChildren();
       const labels = ["Date", "Account", "Payee", "Memo", "Status", "Amount", "Decision"];
@@ -882,14 +929,6 @@ HTML = """<!doctype html>
           statusStack.append(clearance);
         }
 
-        const segmented = document.createElement("div");
-        segmented.className = "segmented";
-        segmented.append(
-          decisionButton(row, "auto", "Auto"),
-          decisionButton(row, "include", "In"),
-          decisionButton(row, "exclude", "Out")
-        );
-
         const cells = [
           shortDate(row.date),
           row.account,
@@ -897,7 +936,7 @@ HTML = """<!doctype html>
           row.memo || "",
           statusStack,
           money.format(row.amount),
-          segmented
+          decisionControl(row)
         ];
 
         cells.forEach((value, index) => {
