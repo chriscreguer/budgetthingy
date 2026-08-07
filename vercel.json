@@ -10,7 +10,7 @@
     },
     {
       "source": "/manifest.webmanifest",
-      "destination": "/api/index"
+      "destination": "/api/index?manifest=1"
     }
   ]
 }

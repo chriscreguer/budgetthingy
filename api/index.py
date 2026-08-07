@@ -15,7 +15,10 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
-        if path in {"/", "/dashboard", "/api/index"}:
+        query = parse_qs(parsed.query)
+        if (query.get("manifest") or [""])[0] == "1":
+            self._send_manifest(_dashboard_key(parsed))
+        elif path in {"/", "/dashboard", "/api/index"}:
             self._send(200, HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/manifest.webmanifest":
             self._send_manifest(_dashboard_key(parsed))
