@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlparse
 from api.display import _load_budget_bin
 from api.generate import _generate_summary
 from budget_pace import build_budget_bin
-from dashboard import HTML, _dashboard_payload, _reprint_token
+from dashboard import HTML, _dashboard_key, _dashboard_payload, _manifest_payload, _public_asset, _reprint_token
 from transaction_overrides import load_overrides, record_reprint, set_decision
 
 
@@ -17,6 +17,16 @@ class handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         if path in {"/", "/dashboard", "/api/index"}:
             self._send(200, HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif path == "/manifest.webmanifest":
+            self._send_manifest(_dashboard_key(parsed))
+        elif asset := _public_asset(path):
+            body, content_type = asset
+            self._send(
+                200,
+                body,
+                content_type,
+                {"Cache-Control": "public, max-age=86400"},
+            )
         elif path == "/api/dashboard":
             if not self._authorized(parsed):
                 self._send_json(401, {"ok": False, "error": "unauthorized"})
@@ -119,6 +129,15 @@ class handler(BaseHTTPRequestHandler):
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
         self._send(status, body, "application/json")
+
+    def _send_manifest(self, key: str = "") -> None:
+        body = json.dumps(_manifest_payload(key), separators=(",", ":")).encode("utf-8")
+        self._send(
+            200,
+            body,
+            "application/manifest+json",
+            {"Cache-Control": "no-store"},
+        )
 
     def _error(self, exc: Exception) -> None:
         self._send_json(

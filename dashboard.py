@@ -3,7 +3,7 @@ import os
 import socket
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from budget_pace import build_budget_bin, fetch_budget_snapshot
 from transaction_overrides import load_overrides, load_store, record_reprint, set_decision
@@ -11,6 +11,62 @@ from transaction_overrides import load_overrides, load_store, record_reprint, se
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PORT = int(os.environ.get("BUDGET_DASHBOARD_PORT", "8765"))
+PUBLIC_ASSETS = {
+    "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+    "/app-preview.png": ("app-preview.png", "image/png"),
+    "/screenshot-mobile.png": ("screenshot-mobile.png", "image/png"),
+}
+
+
+def _dashboard_key(parsed) -> str:
+    return (parse_qs(parsed.query).get("key") or [""])[0]
+
+
+def _manifest_payload(key: str = "") -> dict:
+    start_url = f"/?key={key}" if key else "/"
+    return {
+        "name": "Budget Dashboard",
+        "short_name": "Budget",
+        "description": "Month-to-date budget pace and card spending dashboard.",
+        "start_url": start_url,
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#0b0f14",
+        "theme_color": "#0b0f14",
+        "icons": [
+            {
+                "src": "/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "any maskable",
+            },
+            {
+                "src": "/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any maskable",
+            },
+        ],
+        "screenshots": [
+            {
+                "src": "/screenshot-mobile.png",
+                "sizes": "1290x2796",
+                "type": "image/png",
+                "form_factor": "narrow",
+            }
+        ],
+    }
+
+
+def _public_asset(path: str) -> tuple[bytes, str] | None:
+    asset = PUBLIC_ASSETS.get(path)
+    if asset is None:
+        return None
+    filename, content_type = asset
+    with open(os.path.join(ROOT, "public", filename), "rb") as f:
+        return f.read(), content_type
 
 
 HTML = """<!doctype html>
@@ -19,6 +75,19 @@ HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Budget Dashboard</title>
+  <meta name="description" content="Month-to-date budget pace and card spending dashboard.">
+  <meta name="application-name" content="Budget Dashboard">
+  <meta name="theme-color" content="#0b0f14">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Budget">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta property="og:title" content="Budget Dashboard">
+  <meta property="og:description" content="Month-to-date budget pace and card spending dashboard.">
+  <meta property="og:image" content="/app-preview.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
   <style>
     :root {
       color-scheme: dark;
@@ -350,6 +419,140 @@ HTML = """<!doctype html>
       .pace-note { text-align: left; }
       input { width: 100%; }
     }
+    @media (max-width: 720px) {
+      .wrap { width: min(100% - 20px, 1380px); }
+      main { padding: 12px 0 22px; }
+      .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .metric {
+        min-height: 78px;
+        padding: 10px;
+      }
+      .metric .value { font-size: 20px; }
+      .panel-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      .filters {
+        align-items: stretch;
+        width: 100%;
+      }
+      .filters input,
+      .filters select {
+        width: 100%;
+      }
+      .table-wrap { overflow: visible; }
+      table {
+        min-width: 0;
+        border-collapse: separate;
+      }
+      table,
+      tbody,
+      tr,
+      td {
+        display: block;
+      }
+      thead { display: none; }
+      tbody {
+        display: grid;
+        gap: 8px;
+        padding: 8px;
+      }
+      tr {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 7px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        padding: 10px;
+      }
+      tr.excluded { background: var(--excluded-bg); }
+      td {
+        min-width: 0;
+        padding: 0;
+        border-bottom: 0;
+        white-space: normal;
+      }
+      tr.excluded td {
+        color: inherit;
+        background: transparent;
+      }
+      td::before {
+        content: attr(data-label);
+        display: block;
+        margin-bottom: 2px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      td[data-label="Date"] {
+        grid-column: 1;
+        grid-row: 1;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      td[data-label="Amount"] {
+        grid-column: 2;
+        grid-row: 1;
+        align-self: start;
+        font-size: 16px;
+        font-weight: 700;
+        text-align: right;
+      }
+      td[data-label="Payee"] {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        font-size: 16px;
+        font-weight: 700;
+      }
+      td[data-label="Account"] {
+        grid-column: 1 / -1;
+        grid-row: 3;
+      }
+      td[data-label="Memo"] {
+        grid-column: 1 / -1;
+        grid-row: 4;
+      }
+      td[data-label="Status"] {
+        grid-column: 1 / -1;
+        grid-row: 5;
+      }
+      td[data-label="Decision"] {
+        grid-column: 1 / -1;
+        grid-row: 6;
+      }
+      td[data-label="Date"]::before,
+      td[data-label="Amount"]::before,
+      td[data-label="Payee"]::before {
+        display: none;
+      }
+      .payee,
+      .memo {
+        max-width: none;
+        overflow: visible;
+        text-overflow: clip;
+      }
+      .status-stack { flex-wrap: wrap; }
+      td.empty { display: none; }
+      .segmented { width: 100%; }
+      .segmented button {
+        flex: 1;
+        min-width: 0;
+      }
+      .pace-scale {
+        grid-template-columns: 1fr;
+        gap: 2px;
+      }
+      .pace-scale span,
+      .pace-scale span:nth-child(2),
+      .pace-scale span:last-child {
+        text-align: left;
+      }
+    }
   </style>
 </head>
 <body>
@@ -437,6 +640,10 @@ HTML = """<!doctype html>
     const queryKey = query.get("key");
     if (queryKey) localStorage.setItem("budgetDashboardKey", queryKey);
     const dashboardKey = queryKey || localStorage.getItem("budgetDashboardKey") || "";
+    const manifestLink = document.createElement("link");
+    manifestLink.rel = "manifest";
+    manifestLink.href = dashboardKey ? `/manifest.webmanifest?key=${encodeURIComponent(dashboardKey)}` : "/manifest.webmanifest";
+    document.head.append(manifestLink);
     const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
     const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 
@@ -475,8 +682,17 @@ HTML = """<!doctype html>
 
     function includesSearch(row, query) {
       if (!query) return true;
-      const haystack = [row.account, row.payee, row.memo, row.reason, row.cleared].join(" ").toLowerCase();
+      const haystack = [row.date, row.account, row.payee, row.memo, row.reason, row.cleared].join(" ").toLowerCase();
       return haystack.includes(query);
+    }
+
+    function shortDate(value) {
+      const parts = String(value || "").split("-");
+      if (parts.length !== 3) return value || "";
+      const month = Number(parts[1]);
+      const day = Number(parts[2]);
+      if (!month || !day) return value || "";
+      return `${month}/${day}`;
     }
 
     function pct(value) {
@@ -518,6 +734,7 @@ HTML = """<!doctype html>
 
     function renderTransactions() {
       els.transactionBody.replaceChildren();
+      const labels = ["Date", "Account", "Payee", "Memo", "Status", "Amount", "Decision"];
       for (const row of visibleRows()) {
         const tr = document.createElement("tr");
         tr.className = row.included ? "" : "excluded";
@@ -546,7 +763,7 @@ HTML = """<!doctype html>
         );
 
         const cells = [
-          row.date,
+          shortDate(row.date),
           row.account,
           row.payee,
           row.memo || "",
@@ -557,9 +774,11 @@ HTML = """<!doctype html>
 
         cells.forEach((value, index) => {
           const td = document.createElement("td");
+          td.dataset.label = labels[index];
           if (index === 2) td.className = "payee";
           if (index === 3) td.className = "memo";
           if (index === 5) td.className = "amount";
+          if (index === 3 && !value) td.classList.add("empty");
           if (typeof value === "string") td.textContent = value;
           else td.append(value);
           tr.append(td);
@@ -715,10 +934,16 @@ def _reprint_token() -> str:
 
 class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        path = urlparse(self.path).path.rstrip("/") or "/"
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
         try:
             if path in {"/", "/index.html"}:
                 self._send(200, HTML.encode("utf-8"), "text/html; charset=utf-8")
+            elif path == "/manifest.webmanifest":
+                self._send_manifest(_dashboard_key(parsed))
+            elif asset := _public_asset(path):
+                body, content_type = asset
+                self._send(body=body, status=200, content_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
             elif path == "/api/dashboard":
                 self._send_json(200, _dashboard_payload())
             elif path == "/api/display":
@@ -788,6 +1013,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
         self._send(status, body, "application/json")
+
+    def _send_manifest(self, key: str = "") -> None:
+        body = json.dumps(_manifest_payload(key), separators=(",", ":")).encode("utf-8")
+        self._send(
+            200,
+            body,
+            "application/manifest+json",
+            {"Cache-Control": "no-store"},
+        )
 
     def _send(
         self,

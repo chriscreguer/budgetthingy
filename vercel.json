@@ -7,6 +7,10 @@
     {
       "source": "/dashboard",
       "destination": "/api/index"
+    },
+    {
+      "source": "/manifest.webmanifest",
+      "destination": "/api/index"
     }
   ]
 }
