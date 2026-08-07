@@ -165,8 +165,8 @@ HTML = """<!doctype html>
     .pace-bar {
       position: relative;
       height: 34px;
-      border: 2px solid var(--black);
-      background: var(--paper);
+      border: 2px solid var(--paper);
+      background: var(--black);
       margin: 18px 4px 10px;
     }
     .pace-fill,
@@ -178,7 +178,7 @@ HTML = """<!doctype html>
       width: 0;
       transition: width 140ms ease, left 140ms ease;
     }
-    .pace-fill { background: var(--black); }
+    .pace-fill { background: var(--paper); }
     .pace-overage { background: var(--red); }
     .pace-tick {
       position: absolute;
