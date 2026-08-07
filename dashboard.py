@@ -13,6 +13,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PORT = int(os.environ.get("BUDGET_DASHBOARD_PORT", "8765"))
 PUBLIC_ASSETS = {
     "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+    "/ios-icon.png": ("ios icon.png", "image/png"),
     "/icon-192.png": ("icon-192.png", "image/png"),
     "/icon-512.png": ("icon-512.png", "image/png"),
     "/app-preview.png": ("app-preview.png", "image/png"),
@@ -36,6 +37,12 @@ def _manifest_payload(key: str = "") -> dict:
         "background_color": "#0b0f14",
         "theme_color": "#0b0f14",
         "icons": [
+            {
+                "src": "/ios-icon.png",
+                "sizes": "1024x1024",
+                "type": "image/png",
+                "purpose": "any",
+            },
             {
                 "src": "/icon-192.png",
                 "sizes": "192x192",
@@ -85,7 +92,8 @@ HTML = """<!doctype html>
   <meta property="og:title" content="Budget Dashboard">
   <meta property="og:description" content="Month-to-date budget pace and card spending dashboard.">
   <meta property="og:image" content="/app-preview.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="1024x1024" href="/ios-icon.png">
+  <link rel="apple-touch-icon" href="/ios-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
   <style>
@@ -138,6 +146,9 @@ HTML = """<!doctype html>
       letter-spacing: 0;
     }
     .subtle { color: var(--muted); }
+    .title-group {
+      min-width: 0;
+    }
     .actions, .filters, .segmented {
       display: flex;
       align-items: center;
@@ -161,6 +172,34 @@ HTML = """<!doctype html>
       border-color: var(--accent);
       background: var(--accent);
       color: #04110f;
+    }
+    .icon-button {
+      width: 36px;
+      padding: 0;
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .icon-button .button-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .icon-button svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     button.primary:hover { background: var(--accent-strong); }
     button:disabled {
@@ -414,34 +453,88 @@ HTML = """<!doctype html>
     @media (max-width: 980px) {
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .layout { grid-template-columns: 1fr; }
-      .topbar { align-items: flex-start; flex-direction: column; padding: 14px 0; }
+      .topbar { padding: 12px 0; }
       .pace-head { align-items: flex-start; flex-direction: column; }
       .pace-note { text-align: left; }
       input { width: 100%; }
     }
     @media (max-width: 720px) {
       .wrap { width: min(100% - 20px, 1380px); }
-      main { padding: 12px 0 22px; }
-      .metrics {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+      main { padding: 10px 0 18px; }
+      .topbar {
+        min-height: 54px;
         gap: 8px;
       }
-      .metric {
-        min-height: 78px;
-        padding: 10px;
+      h1 { font-size: 19px; }
+      .title-group .subtle { font-size: 12px; }
+      .actions {
+        flex-wrap: nowrap;
+        gap: 6px;
       }
-      .metric .value { font-size: 20px; }
+      button {
+        height: 32px;
+        padding: 0 10px;
+        font-size: 13px;
+      }
+      .icon-button {
+        width: 32px;
+        padding: 0;
+      }
+      .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .metric {
+        min-height: 64px;
+        padding: 8px;
+      }
+      .metric .label {
+        font-size: 10px;
+        line-height: 1.1;
+      }
+      .metric .value {
+        margin-top: 5px;
+        font-size: 18px;
+      }
+      .metric .note {
+        margin-top: 2px;
+        font-size: 11px;
+        line-height: 1.2;
+      }
+      .pace-panel {
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+      .pace-head {
+        gap: 4px;
+        margin-bottom: 8px;
+      }
+      .pace-bar {
+        height: 26px;
+        margin: 14px 3px 8px;
+      }
+      .pace-tick {
+        top: -14px;
+        bottom: -14px;
+      }
       .panel-head {
         align-items: stretch;
         flex-direction: column;
+        min-height: 0;
+        padding: 8px;
+        gap: 8px;
       }
       .filters {
         align-items: stretch;
         width: 100%;
+        gap: 6px;
       }
       .filters input,
       .filters select {
         width: 100%;
+        height: 32px;
+        font-size: 13px;
       }
       .table-wrap { overflow: visible; }
       table {
@@ -457,17 +550,17 @@ HTML = """<!doctype html>
       thead { display: none; }
       tbody {
         display: grid;
-        gap: 8px;
-        padding: 8px;
+        gap: 6px;
+        padding: 6px;
       }
       tr {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
-        gap: 7px 12px;
+        gap: 4px 8px;
         border: 1px solid var(--line);
         border-radius: 6px;
         background: var(--surface);
-        padding: 10px;
+        padding: 8px;
       }
       tr.excluded { background: var(--excluded-bg); }
       td {
@@ -483,9 +576,10 @@ HTML = """<!doctype html>
       td::before {
         content: attr(data-label);
         display: block;
-        margin-bottom: 2px;
+        margin-bottom: 1px;
         color: var(--muted);
-        font-size: 11px;
+        font-size: 10px;
+        line-height: 1;
         font-weight: 700;
         text-transform: uppercase;
       }
@@ -493,41 +587,54 @@ HTML = """<!doctype html>
         grid-column: 1;
         grid-row: 1;
         color: var(--muted);
-        font-size: 13px;
+        font-size: 12px;
       }
       td[data-label="Amount"] {
         grid-column: 2;
         grid-row: 1;
         align-self: start;
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 700;
         text-align: right;
       }
       td[data-label="Payee"] {
         grid-column: 1 / -1;
         grid-row: 2;
-        font-size: 16px;
+        font-size: 15px;
+        line-height: 1.25;
         font-weight: 700;
       }
       td[data-label="Account"] {
-        grid-column: 1 / -1;
+        grid-column: 1;
         grid-row: 3;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.2;
       }
       td[data-label="Memo"] {
         grid-column: 1 / -1;
         grid-row: 4;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.25;
       }
       td[data-label="Status"] {
-        grid-column: 1 / -1;
-        grid-row: 5;
+        grid-column: 2;
+        grid-row: 3;
+        justify-self: end;
       }
       td[data-label="Decision"] {
         grid-column: 1 / -1;
-        grid-row: 6;
+        grid-row: 5;
+        margin-top: 1px;
       }
       td[data-label="Date"]::before,
       td[data-label="Amount"]::before,
-      td[data-label="Payee"]::before {
+      td[data-label="Payee"]::before,
+      td[data-label="Account"]::before,
+      td[data-label="Memo"]::before,
+      td[data-label="Status"]::before,
+      td[data-label="Decision"]::before {
         display: none;
       }
       .payee,
@@ -536,16 +643,29 @@ HTML = """<!doctype html>
         overflow: visible;
         text-overflow: clip;
       }
-      .status-stack { flex-wrap: wrap; }
+      .status-stack {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .pill {
+        min-height: 20px;
+        padding: 1px 7px;
+        font-size: 11px;
+      }
+      .clearance { font-size: 11px; }
       td.empty { display: none; }
       .segmented { width: 100%; }
       .segmented button {
         flex: 1;
         min-width: 0;
+        height: 28px;
       }
+      .side-list { padding: 5px 8px 8px; }
+      .account-row { padding: 7px 0; }
       .pace-scale {
         grid-template-columns: 1fr;
         gap: 2px;
+        font-size: 11px;
       }
       .pace-scale span,
       .pace-scale span:nth-child(2),
@@ -558,12 +678,20 @@ HTML = """<!doctype html>
 <body>
   <header>
     <div class="wrap topbar">
-      <div>
+      <div class="title-group">
         <h1>Budget Dashboard</h1>
         <div class="subtle" id="monthLabel">Loading</div>
       </div>
       <div class="actions">
-        <button id="refreshButton">Refresh</button>
+        <button class="icon-button" id="refreshButton" aria-label="Refresh" title="Refresh">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 12a9 9 0 0 1-15.1 6.6"></path>
+            <path d="M3 12A9 9 0 0 1 18.1 5.4"></path>
+            <path d="M21 5v5h-5"></path>
+            <path d="M3 19v-5h5"></path>
+          </svg>
+          <span class="button-label">Refresh</span>
+        </button>
         <button class="primary" id="reprintButton">Reprint Now</button>
       </div>
     </div>
