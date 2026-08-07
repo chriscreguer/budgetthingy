@@ -1,4 +1,4 @@
-from budget_pace import calculate_pace
+from budget_pace import calculate_pace, progress_bar_metrics
 
 
 def test_on_track_exact_pace():
@@ -39,3 +39,21 @@ def test_state_boundaries():
     # pace > 1.00 -> Slow down
     _, label, _ = calculate_pace(1000.0, 501.0, day=15, days_in_month=30)
     assert label == "Slow down"
+
+
+def test_progress_bar_metrics_match_eink_bar_math():
+    metrics = progress_bar_metrics(assigned=1000.0, spent=600.0, expected=500.0)
+
+    assert metrics["fill"] == 0.6
+    assert metrics["tick"] == 0.5
+    assert metrics["on_pace_fill"] == 0.5
+    assert abs(metrics["overage"] - 0.1) < 0.001
+
+
+def test_progress_bar_metrics_zero_assigned():
+    assert progress_bar_metrics(assigned=0.0, spent=50.0, expected=0.0) == {
+        "fill": 0.0,
+        "tick": 0.0,
+        "on_pace_fill": 0.0,
+        "overage": 0.0,
+    }

@@ -1,6 +1,9 @@
 import calendar
+import hashlib
+import html
 import os
 import sys
+import tempfile
 from datetime import date, datetime
 
 import requests
@@ -99,43 +102,126 @@ def _is_excluded_payee(transaction: dict) -> bool:
     return any(pattern in payee_name for pattern in config.EXCLUDED_PAYEE_PATTERNS)
 
 
-def fetch_flexible_totals() -> tuple[float, float]:
-    """Returns (assigned_dollars, spent_dollars) for non-fixed budget groups."""
+def _display_text(value: str | None, fallback: str = "") -> str:
+    text = value or fallback
+    return html.unescape(text)
+
+
+def _display_account_name(account_name: str | None) -> str:
+    account = _display_text(account_name, "Unknown account")
+    if "costco anywhere visa" in account.casefold():
+        return "Costco Citi"
+    return account
+
+
+def _normalize_decision(decision: str | None) -> str:
+    if decision in {"include", "exclude"}:
+        return decision
+    return "auto"
+
+
+def _override_decision(overrides: dict | None, line_id: str) -> str:
+    if not overrides:
+        return "auto"
+    transactions = overrides.get("transactions", overrides)
+    entry = transactions.get(line_id) if isinstance(transactions, dict) else None
+    if isinstance(entry, dict):
+        return _normalize_decision(entry.get("decision"))
+    if isinstance(entry, str):
+        return _normalize_decision(entry)
+    return "auto"
+
+
+def _fallback_line_id(
+    transaction: dict,
+    transaction_index: int,
+    subtransaction: dict | None = None,
+    subtransaction_index: int | None = None,
+) -> str:
+    pieces = [
+        str(transaction.get("date", "")),
+        str(transaction.get("amount", "")),
+        str(transaction.get("payee_name", "")),
+        str(transaction.get("memo", "")),
+        str(transaction_index),
+    ]
+    if subtransaction is not None:
+        pieces.extend(
+            [
+                str(subtransaction.get("amount", "")),
+                str(subtransaction.get("memo", "")),
+                str(subtransaction_index),
+            ]
+        )
+    digest = hashlib.sha1("|".join(pieces).encode("utf-8")).hexdigest()[:16]
+    return f"fallback-{digest}"
+
+
+def _line_id(
+    transaction: dict,
+    transaction_index: int,
+    subtransaction: dict | None = None,
+    subtransaction_index: int | None = None,
+) -> str:
+    transaction_id = transaction.get("id") or _fallback_line_id(transaction, transaction_index)
+    if subtransaction is None:
+        return str(transaction_id)
+
+    subtransaction_id = subtransaction.get("id")
+    if subtransaction_id:
+        return f"{transaction_id}:{subtransaction_id}"
+    return _fallback_line_id(transaction, transaction_index, subtransaction, subtransaction_index)
+
+
+def _category_context(groups: list[dict]) -> tuple[list[dict], set[str], dict[str, dict]]:
+    included_categories = []
+    excluded_category_ids = set()
+    category_lookup = {}
+
+    for group in groups:
+        group_name = group.get("name", "")
+        group_hidden = bool(group.get("hidden") or group.get("deleted"))
+        group_excluded = group_name in config.EXCLUDED_GROUP_NAMES
+
+        for category in group.get("categories", []):
+            category_id = category.get("id")
+            if not category_id:
+                continue
+
+            category_lookup[category_id] = {
+                "id": category_id,
+                "name": category.get("name") or "Uncategorized",
+                "group_name": group_name or "Uncategorized",
+                "hidden": bool(category.get("hidden") or category.get("deleted") or group_hidden),
+                "group_excluded": group_excluded,
+            }
+
+            if group_excluded:
+                excluded_category_ids.add(category_id)
+                continue
+            if group_hidden or category.get("hidden") or category.get("deleted"):
+                continue
+            included_categories.append(category)
+
+    return included_categories, excluded_category_ids, category_lookup
+
+
+def _ynab_headers() -> dict[str, str]:
     if not config.API_TOKEN:
         raise ValueError("YNAB_API_TOKEN is not set in environment or .env")
     if not config.BUDGET_ID:
         raise ValueError("YNAB_BUDGET_ID is not set in environment or .env")
+    return {"Authorization": f"Bearer {config.API_TOKEN}"}
 
+
+def _fetch_ynab_category_groups(headers: dict[str, str]) -> list[dict]:
     url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/categories"
-    headers = {"Authorization": f"Bearer {config.API_TOKEN}"}
-
     categories_resp = requests.get(url, headers=headers, timeout=10)
     categories_resp.raise_for_status()
+    return categories_resp.json()["data"]["category_groups"]
 
-    groups = categories_resp.json()["data"]["category_groups"]
-    included_categories = []
-    excluded_category_ids = set()
-    for group in groups:
-        if group["name"] in config.EXCLUDED_GROUP_NAMES:
-            excluded_category_ids.update(
-                category["id"]
-                for category in group["categories"]
-                if category.get("id")
-            )
-            continue
-        if group.get("hidden") or group.get("deleted"):
-            continue
-        included_categories.extend(
-            category
-            for category in group["categories"]
-            if not category.get("hidden") and not category.get("deleted")
-        )
 
-    if not included_categories:
-        excluded = ", ".join(sorted(config.EXCLUDED_GROUP_NAMES))
-        raise ValueError(f"No included YNAB categories found. Excluded groups: {excluded}")
-
-    today = date.today()
+def _fetch_ynab_transactions(headers: dict[str, str], today: date) -> list[dict]:
     since_date = today.replace(day=1).isoformat()
     transactions_url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/transactions"
     transactions_resp = requests.get(
@@ -145,39 +231,237 @@ def fetch_flexible_totals() -> tuple[float, float]:
         timeout=10,
     )
     transactions_resp.raise_for_status()
+    return transactions_resp.json()["data"]["transactions"]
 
-    spent_milliunits = 0
-    transactions = transactions_resp.json()["data"]["transactions"]
-    for transaction in transactions:
+
+def _default_line_status(
+    transaction: dict,
+    amount_source: dict,
+    category_id: str | None,
+    excluded_category_ids: set[str],
+    category_lookup: dict[str, dict],
+) -> tuple[bool, str]:
+    if _is_excluded_payee(transaction):
+        return False, "payee rule"
+    if amount_source.get("transfer_account_id"):
+        return False, "transfer"
+    if category_id in excluded_category_ids:
+        group_name = category_lookup.get(category_id, {}).get("group_name") or "excluded group"
+        return False, group_name
+    return True, "budgeted spending"
+
+
+def _transaction_line(
+    transaction: dict,
+    transaction_index: int,
+    amount_source: dict,
+    category_id: str | None,
+    excluded_category_ids: set[str],
+    category_lookup: dict[str, dict],
+    overrides: dict | None,
+    subtransaction: dict | None = None,
+    subtransaction_index: int | None = None,
+) -> dict | None:
+    raw_amount = amount_source.get("amount", 0)
+    outflow_milliunits = max(0, -raw_amount)
+    if outflow_milliunits == 0:
+        return None
+
+    line_id = _line_id(transaction, transaction_index, subtransaction, subtransaction_index)
+    default_included, default_reason = _default_line_status(
+        transaction,
+        amount_source,
+        category_id,
+        excluded_category_ids,
+        category_lookup,
+    )
+    decision = _override_decision(overrides, line_id)
+    included = default_included
+    reason = default_reason
+    if decision == "include":
+        included = True
+        reason = "manual include"
+    elif decision == "exclude":
+        included = False
+        reason = "manual exclude"
+
+    category = category_lookup.get(category_id or "", {})
+    category_name = (
+        category.get("name")
+        or amount_source.get("category_name")
+        or transaction.get("category_name")
+        or "Uncategorized"
+    )
+    return {
+        "line_id": line_id,
+        "transaction_id": transaction.get("id") or "",
+        "subtransaction_id": (subtransaction or {}).get("id") or "",
+        "date": transaction.get("date") or "",
+        "payee": _display_text(transaction.get("payee_name"), "Uncategorized"),
+        "memo": _display_text(amount_source.get("memo") or transaction.get("memo")),
+        "account": _display_account_name(transaction.get("account_name")),
+        "amount": _milliunits_to_dollars(outflow_milliunits),
+        "amount_milliunits": outflow_milliunits,
+        "category_id": category_id or "",
+        "category": _display_text(category_name, "Uncategorized"),
+        "category_group": _display_text(category.get("group_name"), "Uncategorized"),
+        "default_included": default_included,
+        "included": included,
+        "decision": decision,
+        "reason": reason,
+        "cleared": transaction.get("cleared") or "",
+        "approved": bool(transaction.get("approved", False)),
+    }
+
+
+def _transaction_lines(
+    transactions: list[dict],
+    today: date,
+    excluded_category_ids: set[str],
+    category_lookup: dict[str, dict],
+    overrides: dict | None,
+) -> list[dict]:
+    lines = []
+    for transaction_index, transaction in enumerate(transactions):
         if transaction.get("deleted") or not _is_current_month(transaction, today):
-            continue
-        if _is_excluded_payee(transaction):
-            continue
-        if transaction.get("transfer_account_id"):
-            continue
-        if transaction.get("category_id") in excluded_category_ids:
             continue
 
         subtransactions = transaction.get("subtransactions") or []
         if subtransactions:
-            for subtransaction in subtransactions:
+            for subtransaction_index, subtransaction in enumerate(subtransactions):
                 if subtransaction.get("deleted"):
                     continue
-                if subtransaction.get("transfer_account_id"):
-                    continue
-                if subtransaction.get("category_id") in excluded_category_ids:
-                    continue
-                spent_milliunits += max(0, -subtransaction["amount"])
+                line = _transaction_line(
+                    transaction,
+                    transaction_index,
+                    subtransaction,
+                    subtransaction.get("category_id"),
+                    excluded_category_ids,
+                    category_lookup,
+                    overrides,
+                    subtransaction=subtransaction,
+                    subtransaction_index=subtransaction_index,
+                )
+                if line is not None:
+                    lines.append(line)
         else:
-            spent_milliunits += max(0, -transaction["amount"])
+            line = _transaction_line(
+                transaction,
+                transaction_index,
+                transaction,
+                transaction.get("category_id"),
+                excluded_category_ids,
+                category_lookup,
+                overrides,
+            )
+            if line is not None:
+                lines.append(line)
 
-    spent = _milliunits_to_dollars(spent_milliunits)
+    return sorted(lines, key=lambda item: (item["date"], item["payee"], item["amount"]), reverse=True)
+
+
+def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = None) -> dict:
+    """Returns detailed budget pace data with per-purchase inclusion decisions."""
+    today = today or date.today()
+    headers = _ynab_headers()
+    groups = _fetch_ynab_category_groups(headers)
+    included_categories, excluded_category_ids, category_lookup = _category_context(groups)
+
+    if not included_categories:
+        excluded = ", ".join(sorted(config.EXCLUDED_GROUP_NAMES))
+        raise ValueError(f"No included YNAB categories found. Excluded groups: {excluded}")
+
+    transactions = _fetch_ynab_transactions(headers, today)
+    lines = _transaction_lines(
+        transactions,
+        today,
+        excluded_category_ids,
+        category_lookup,
+        overrides,
+    )
+    spent = sum(line["amount"] for line in lines if line["included"])
     assigned = (
         config.FLEXIBLE_BUDGET
         if config.FLEXIBLE_BUDGET > 0
         else _milliunits_to_dollars(sum(c["budgeted"] for c in included_categories))
     )
-    return assigned, spent
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    pace_ratio, state_label, expected = calculate_pace(
+        assigned,
+        spent,
+        day=today.day,
+        days_in_month=days_in_month,
+    )
+
+    category_totals_by_id = {}
+    account_totals_by_name = {}
+    excluded_reasons = {}
+    for line in lines:
+        if not line["included"]:
+            excluded_reasons[line["reason"]] = excluded_reasons.get(line["reason"], 0) + 1
+            continue
+
+        account_key = line["account"] or "Unknown account"
+        if account_key not in account_totals_by_name:
+            account_totals_by_name[account_key] = {
+                "account": account_key,
+                "spent": 0.0,
+                "count": 0,
+            }
+        account_totals_by_name[account_key]["spent"] += line["amount"]
+        account_totals_by_name[account_key]["count"] += 1
+
+        category_key = line["category_id"] or "uncategorized"
+        if category_key not in category_totals_by_id:
+            category_totals_by_id[category_key] = {
+                "category_id": line["category_id"],
+                "category": line["category"],
+                "category_group": line["category_group"],
+                "spent": 0.0,
+            }
+        category_totals_by_id[category_key]["spent"] += line["amount"]
+
+    return {
+        "ok": True,
+        "month": today.strftime("%Y-%m"),
+        "day": today.day,
+        "days_in_month": days_in_month,
+        "assigned": assigned,
+        "spent": spent,
+        "expected": expected,
+        "remaining": assigned - spent,
+        "pace": pace_ratio,
+        "state": state_label,
+        "progress": progress_bar_metrics(assigned, spent, expected),
+        "transactions": lines,
+        "category_totals": sorted(
+            category_totals_by_id.values(),
+            key=lambda item: item["spent"],
+            reverse=True,
+        ),
+        "account_totals": sorted(
+            account_totals_by_name.values(),
+            key=lambda item: item["spent"],
+            reverse=True,
+        ),
+        "excluded_reasons": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(excluded_reasons.items(), key=lambda item: item[1], reverse=True)
+        ],
+        "counts": {
+            "included": sum(1 for line in lines if line["included"]),
+            "excluded": sum(1 for line in lines if not line["included"]),
+            "overridden": sum(1 for line in lines if line["decision"] != "auto"),
+            "total": len(lines),
+            "clearance": _clearance_counts(lines),
+        },
+    }
+
+
+def fetch_flexible_totals(overrides: dict | None = None) -> tuple[float, float]:
+    """Returns (assigned_dollars, spent_dollars) for non-fixed budget groups."""
+    snapshot = fetch_budget_snapshot(overrides)
+    return snapshot["assigned"], snapshot["spent"]
 
 
 def calculate_pace(
@@ -205,6 +489,46 @@ def calculate_pace(
         label = "Slow down"
 
     return pace, label, expected
+
+
+def progress_bar_metrics(assigned: float, spent: float, expected: float) -> dict[str, float]:
+    """Returns normalized e-ink progress-bar ratios for web and image rendering."""
+    if assigned <= 0:
+        return {
+            "fill": 0.0,
+            "tick": 0.0,
+            "on_pace_fill": 0.0,
+            "overage": 0.0,
+        }
+
+    fill = min(max(spent / assigned, 0.0), 1.0)
+    tick = min(max(expected / assigned, 0.0), 1.0)
+    overage = max(fill - tick, 0.0) if spent > expected else 0.0
+
+    return {
+        "fill": fill,
+        "tick": tick,
+        "on_pace_fill": tick if overage > 0 else fill,
+        "overage": overage,
+    }
+
+
+def _clearance_counts(lines: list[dict]) -> dict[str, dict[str, int]]:
+    statuses = ("cleared", "uncleared", "reconciled", "unknown")
+    counts = {
+        "total": dict.fromkeys(statuses, 0),
+        "included": dict.fromkeys(statuses, 0),
+    }
+
+    for line in lines:
+        status = (line.get("cleared") or "unknown").casefold()
+        if status not in statuses:
+            status = "unknown"
+        counts["total"][status] += 1
+        if line["included"]:
+            counts["included"][status] += 1
+
+    return counts
 
 
 def _text_width_tracked(draw, text: str, font, tracking: int = 0) -> int:
@@ -320,10 +644,9 @@ def render_png(
     bar_width = bar_right - bar_left
 
     if assigned > 0:
-        fill_frac = min(spent / assigned, 1.0)
-        fill_right = bar_left + int(fill_frac * bar_width)
-        tick_frac = min(expected / assigned, 1.0)
-        tick_x = bar_left + int(tick_frac * bar_width)
+        progress = progress_bar_metrics(assigned, spent, expected)
+        fill_right = bar_left + int(progress["fill"] * bar_width)
+        tick_x = bar_left + int(progress["tick"] * bar_width)
 
         if fill_right > bar_left:
             if spent <= expected:
@@ -360,6 +683,55 @@ def render_png(
 SHIP_VARIANT = "byr"
 # Preview-only palettes rendered for visual comparison (skipped with --bin-only).
 PREVIEW_VARIANTS = [("nyt", "output_nyt.png"), ("nyt_gray", "output_nyt_gray.png")]
+
+
+def _build_budget_bin_in_dir(output_dir: str, overrides: dict | None = None, tracking: int = -3) -> tuple[bytes, dict]:
+    snapshot = fetch_budget_snapshot(overrides)
+    png_path = os.path.join(output_dir, f"output_{SHIP_VARIANT}.png")
+    bin_path = os.path.join(output_dir, "budget.bin")
+
+    render_png(
+        snapshot["assigned"],
+        snapshot["spent"],
+        snapshot["expected"],
+        snapshot["pace"],
+        snapshot["state"],
+        png_path,
+        SHIP_VARIANT,
+        tracking=tracking,
+    )
+    byte_count = convert(png_path, bin_path)
+
+    with open(bin_path, "rb") as f:
+        data = f.read()
+
+    metadata = {
+        "ok": True,
+        "path": bin_path,
+        "preview_path": png_path,
+        "bytes": byte_count,
+        "state": snapshot["state"],
+        "pace": round(snapshot["pace"], 4),
+        "spent": snapshot["spent"],
+        "assigned": snapshot["assigned"],
+        "expected": snapshot["expected"],
+        "remaining": snapshot["remaining"],
+        "counts": snapshot["counts"],
+    }
+    return data, metadata
+
+
+def build_budget_bin(overrides: dict | None = None, output_dir: str | None = None, tracking: int = -3) -> tuple[bytes, dict]:
+    """Builds the ESP32-ready frame, optionally writing budget.bin/output PNG."""
+    if output_dir is not None:
+        os.makedirs(output_dir, exist_ok=True)
+        return _build_budget_bin_in_dir(output_dir, overrides, tracking)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data, metadata = _build_budget_bin_in_dir(tmp, overrides, tracking)
+        metadata["path"] = "budget.bin"
+        metadata["preview_path"] = f"output_{SHIP_VARIANT}.png"
+        return data, metadata
 
 
 def main() -> None:
