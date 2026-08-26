@@ -10,7 +10,7 @@ https://budgetthingy.vercel.app/api/display
 
 That request does the whole job:
 
-1. Fetch non-fixed spending totals from YNAB.
+1. Fetch current-month spending totals from YNAB.
 2. Render the 792x272 image with Pillow.
 3. Convert it to the 53,856-byte e-paper buffer.
 4. Return those bytes directly to the ESP32.
@@ -24,13 +24,11 @@ Set these on the Vercel project:
 ```text
 YNAB_API_TOKEN=...
 YNAB_BUDGET_ID=...
-FIXED_GROUP_NAME=Fixed
 ```
 
 Optional:
 
 ```text
-EXCLUDED_GROUP_NAMES=Fixed,Internal Master Category,Credit Card Payments
 EXCLUDED_PAYEE_PATTERNS=Withdrawal
 FLEXIBLE_BUDGET=0
 DASHBOARD_KEY=...
@@ -39,11 +37,11 @@ UPSTASH_REDIS_REST_TOKEN=...
 BUDGET_DASHBOARD_STORE_KEY=budget-display:transaction-overrides
 ```
 
-By default, the display counts every visible YNAB category group except `Fixed`, `Internal Master Category`, and `Credit Card Payments`. Set `EXCLUDED_GROUP_NAMES` if your fixed-cost group has a different name or you want to exclude more groups.
+By default, the display counts current-month YNAB outflows across every category group, including uncategorized transactions. Category data is used for labels and, when `FLEXIBLE_BUDGET=0`, to derive the default assigned amount.
 
 Use `EXCLUDED_PAYEE_PATTERNS` for bank/card movement that YNAB imports as a normal transaction instead of a transfer. Matching is case-insensitive substring matching, so `Withdrawal` excludes payees like `Withdrawal`.
 
-When `FLEXIBLE_BUDGET` is greater than zero, that fixed amount is used instead of summing the included YNAB budgeted amounts.
+When `FLEXIBLE_BUDGET` is greater than zero, that fixed amount is used instead of summing visible YNAB budgeted amounts.
 
 ## Endpoints
 
@@ -85,11 +83,11 @@ or Exclude. Manual decisions are saved locally in:
 data/transaction_overrides.json
 ```
 
-The purchase table includes current-month YNAB outflows across all accounts.
+The purchase table includes current-month YNAB outflows across all accounts and category states.
 Deleted transactions, inflows, and zero/positive lines are omitted. The pace total
 counts rows marked Included. By default, rows can be Excluded because of transfer
-status, configured excluded category groups, or configured excluded payee patterns;
-the table shows the reason and a manual Include/Exclude decision overrides it.
+status or configured excluded payee patterns; the table shows the reason and a
+manual Include/Exclude decision overrides it.
 
 The dashboard also serves an override-aware frame at:
 

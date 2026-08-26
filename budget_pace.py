@@ -173,15 +173,14 @@ def _line_id(
     return _fallback_line_id(transaction, transaction_index, subtransaction, subtransaction_index)
 
 
-def _category_context(groups: list[dict]) -> tuple[list[dict], set[str], dict[str, dict]]:
-    included_categories = []
-    excluded_category_ids = set()
+def _category_context(groups: list[dict]) -> tuple[list[dict], dict[str, dict]]:
+    budget_categories = []
     category_lookup = {}
 
     for group in groups:
         group_name = group.get("name", "")
-        group_hidden = bool(group.get("hidden") or group.get("deleted"))
-        group_excluded = group_name in config.EXCLUDED_GROUP_NAMES
+        group_internal = bool(group.get("internal")) or group_name == "Internal Master Category"
+        group_hidden = bool(group.get("hidden") or group.get("deleted") or group_internal)
 
         for category in group.get("categories", []):
             category_id = category.get("id")
@@ -193,17 +192,13 @@ def _category_context(groups: list[dict]) -> tuple[list[dict], set[str], dict[st
                 "name": category.get("name") or "Uncategorized",
                 "group_name": group_name or "Uncategorized",
                 "hidden": bool(category.get("hidden") or category.get("deleted") or group_hidden),
-                "group_excluded": group_excluded,
             }
 
-            if group_excluded:
-                excluded_category_ids.add(category_id)
-                continue
             if group_hidden or category.get("hidden") or category.get("deleted"):
                 continue
-            included_categories.append(category)
+            budget_categories.append(category)
 
-    return included_categories, excluded_category_ids, category_lookup
+    return budget_categories, category_lookup
 
 
 def _ynab_headers() -> dict[str, str]:
@@ -237,18 +232,12 @@ def _fetch_ynab_transactions(headers: dict[str, str], today: date) -> list[dict]
 def _default_line_status(
     transaction: dict,
     amount_source: dict,
-    category_id: str | None,
-    excluded_category_ids: set[str],
-    category_lookup: dict[str, dict],
 ) -> tuple[bool, str]:
     if _is_excluded_payee(transaction):
         return False, "payee rule"
     if amount_source.get("transfer_account_id"):
         return False, "transfer"
-    if category_id in excluded_category_ids:
-        group_name = category_lookup.get(category_id, {}).get("group_name") or "excluded group"
-        return False, group_name
-    return True, "budgeted spending"
+    return True, "spending"
 
 
 def _transaction_line(
@@ -256,7 +245,6 @@ def _transaction_line(
     transaction_index: int,
     amount_source: dict,
     category_id: str | None,
-    excluded_category_ids: set[str],
     category_lookup: dict[str, dict],
     overrides: dict | None,
     subtransaction: dict | None = None,
@@ -271,9 +259,6 @@ def _transaction_line(
     default_included, default_reason = _default_line_status(
         transaction,
         amount_source,
-        category_id,
-        excluded_category_ids,
-        category_lookup,
     )
     decision = _override_decision(overrides, line_id)
     included = default_included
@@ -317,7 +302,6 @@ def _transaction_line(
 def _transaction_lines(
     transactions: list[dict],
     today: date,
-    excluded_category_ids: set[str],
     category_lookup: dict[str, dict],
     overrides: dict | None,
 ) -> list[dict]:
@@ -336,7 +320,6 @@ def _transaction_lines(
                     transaction_index,
                     subtransaction,
                     subtransaction.get("category_id"),
-                    excluded_category_ids,
                     category_lookup,
                     overrides,
                     subtransaction=subtransaction,
@@ -350,7 +333,6 @@ def _transaction_lines(
                 transaction_index,
                 transaction,
                 transaction.get("category_id"),
-                excluded_category_ids,
                 category_lookup,
                 overrides,
             )
@@ -365,17 +347,12 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
     today = today or date.today()
     headers = _ynab_headers()
     groups = _fetch_ynab_category_groups(headers)
-    included_categories, excluded_category_ids, category_lookup = _category_context(groups)
-
-    if not included_categories:
-        excluded = ", ".join(sorted(config.EXCLUDED_GROUP_NAMES))
-        raise ValueError(f"No included YNAB categories found. Excluded groups: {excluded}")
+    budget_categories, category_lookup = _category_context(groups)
 
     transactions = _fetch_ynab_transactions(headers, today)
     lines = _transaction_lines(
         transactions,
         today,
-        excluded_category_ids,
         category_lookup,
         overrides,
     )
@@ -383,7 +360,7 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
     assigned = (
         config.FLEXIBLE_BUDGET
         if config.FLEXIBLE_BUDGET > 0
-        else _milliunits_to_dollars(sum(c["budgeted"] for c in included_categories))
+        else _milliunits_to_dollars(sum(c["budgeted"] for c in budget_categories))
     )
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     pace_ratio, state_label, expected = calculate_pace(
@@ -459,7 +436,7 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
 
 
 def fetch_flexible_totals(overrides: dict | None = None) -> tuple[float, float]:
-    """Returns (assigned_dollars, spent_dollars) for non-fixed budget groups."""
+    """Returns (assigned_dollars, spent_dollars) for current-month spending."""
     snapshot = fetch_budget_snapshot(overrides)
     return snapshot["assigned"], snapshot["spent"]
 

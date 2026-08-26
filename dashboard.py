@@ -719,7 +719,7 @@ HTML = """<!doctype html>
       <div class="metric"><div class="label">State</div><div class="value" id="stateValue">-</div><div class="note" id="paceNote">-</div></div>
       <div class="metric"><div class="label">Spent</div><div class="value" id="spentValue">-</div><div class="note" id="countNote">-</div></div>
       <div class="metric"><div class="label">Expected</div><div class="value" id="expectedValue">-</div><div class="note" id="dayNote">-</div></div>
-      <div class="metric"><div class="label">Assigned</div><div class="value" id="assignedValue">-</div><div class="note">Flexible budget</div></div>
+      <div class="metric"><div class="label">Assigned</div><div class="value" id="assignedValue">-</div><div class="note">Monthly budget</div></div>
       <div class="metric"><div class="label">Remaining</div><div class="value" id="remainingValue">-</div><div class="note">Month total</div></div>
       <div class="metric"><div class="label">Overrides</div><div class="value" id="overrideValue">-</div><div class="note" id="reprintNote">No reprint yet</div></div>
     </section>

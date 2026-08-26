@@ -140,8 +140,8 @@ def _mock_get(response_data, status_code=200):
     return mock
 
 
-def test_sums_non_fixed_groups_only():
-    # FLEXIBLE_BUDGET=0 → falls through to summing included YNAB budgeted amounts
+def test_sums_current_month_outflows_without_category_group_filtering():
+    # FLEXIBLE_BUDGET=0 -> falls through to summing visible YNAB budgeted amounts.
     with patch(
         "budget_pace.requests.get",
         side_effect=[
@@ -150,14 +150,13 @@ def test_sums_non_fixed_groups_only():
         ],
     ), \
          patch("budget_pace.config.FLEXIBLE_BUDGET", 0.0), \
-         patch("budget_pace.config.EXCLUDED_GROUP_NAMES", {"Fixed", "Internal Master Category", "Credit Card Payments"}), \
          patch("budget_pace.config.EXCLUDED_PAYEE_PATTERNS", ("withdrawal",)):
         assigned, spent = fetch_flexible_totals()
-    # (500_000 + 300_000 + 100_000 + 25_000) / 1000 = 925.0
-    assert assigned == 925.0
-    # Includes categorized, uncategorized, and included split outflows.
-    # Excludes fixed categories, credit-card payment categories, and transfers.
-    assert spent == 125.0
+    # Visible YNAB categories still provide the default pace budget when no fixed override is configured.
+    assert assigned == 1925.0
+    # Includes categorized, uncategorized, and split outflows across all category groups.
+    # Excludes configured payee patterns and transfers.
+    assert spent == 2040.0
 
 
 def test_flexible_budget_override():
@@ -170,11 +169,10 @@ def test_flexible_budget_override():
         ],
     ), \
          patch("budget_pace.config.FLEXIBLE_BUDGET", 1200.0), \
-         patch("budget_pace.config.EXCLUDED_GROUP_NAMES", {"Fixed", "Internal Master Category", "Credit Card Payments"}), \
          patch("budget_pace.config.EXCLUDED_PAYEE_PATTERNS", ("withdrawal",)):
         assigned, spent = fetch_flexible_totals()
     assert assigned == 1200.0
-    assert spent == 125.0
+    assert spent == 2040.0
 
 
 def test_uses_correct_url_and_headers():
@@ -196,11 +194,21 @@ def test_uses_correct_url_and_headers():
     assert transaction_call[1]["headers"]["Authorization"] == "Bearer tok-abc"
 
 
-def test_raises_when_no_categories_are_included():
+def test_does_not_require_included_categories_to_fetch_spending():
     bad_response = {"data": {"category_groups": [{"name": "Fixed", "categories": []}]}}
-    with patch("budget_pace.requests.get", return_value=_mock_get(bad_response)):
-        with pytest.raises(ValueError, match="No included YNAB categories"):
-            fetch_flexible_totals()
+    with patch(
+        "budget_pace.requests.get",
+        side_effect=[
+            _mock_get(bad_response),
+            _mock_get(MOCK_TRANSACTIONS_RESPONSE),
+        ],
+    ), \
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 0.0), \
+         patch("budget_pace.config.EXCLUDED_PAYEE_PATTERNS", ("withdrawal",)):
+        assigned, spent = fetch_flexible_totals()
+
+    assert assigned == 0.0
+    assert spent == 2040.0
 
 
 def test_raises_on_missing_api_token():

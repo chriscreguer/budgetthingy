@@ -14,7 +14,6 @@ def _patched_snapshot(overrides=None, transactions_response=None):
         ],
     ), \
          patch("budget_pace.config.FLEXIBLE_BUDGET", 0.0), \
-         patch("budget_pace.config.EXCLUDED_GROUP_NAMES", {"Fixed", "Internal Master Category", "Credit Card Payments"}), \
          patch("budget_pace.config.EXCLUDED_PAYEE_PATTERNS", ("withdrawal",)):
         return fetch_budget_snapshot(overrides)
 
@@ -22,11 +21,11 @@ def _patched_snapshot(overrides=None, transactions_response=None):
 def test_snapshot_exposes_purchase_lines_and_category_totals():
     snapshot = _patched_snapshot()
 
-    assert snapshot["assigned"] == 925.0
-    assert snapshot["spent"] == 125.0
+    assert snapshot["assigned"] == 1925.0
+    assert snapshot["spent"] == 2040.0
     assert snapshot["counts"] == {
-        "included": 4,
-        "excluded": 5,
+        "included": 7,
+        "excluded": 2,
         "overridden": 0,
         "total": 9,
         "clearance": {
@@ -40,16 +39,20 @@ def test_snapshot_exposes_purchase_lines_and_category_totals():
                 "cleared": 0,
                 "uncleared": 0,
                 "reconciled": 0,
-                "unknown": 4,
+                "unknown": 7,
             },
         },
     }
-    assert snapshot["progress"]["fill"] == snapshot["spent"] / snapshot["assigned"]
+    assert snapshot["progress"]["fill"] == 1.0
     totals = [item["spent"] for item in snapshot["category_totals"]]
-    assert totals == [40.0, 35.0, 30.0, 20.0]
-    assert sum(totals) == 125.0
+    assert totals == [1015.0, 900.0, 40.0, 35.0, 30.0, 20.0]
+    assert sum(totals) == 2040.0
+    uncategorized = next(item for item in snapshot["transactions"] if item["amount"] == 20.0)
+    assert uncategorized["category"] == "Uncategorized"
+    assert uncategorized["included"] is True
+    assert uncategorized["reason"] == "spending"
     assert snapshot["account_totals"] == [
-        {"account": "Unknown account", "spent": 125.0, "count": 4}
+        {"account": "Unknown account", "spent": 2040.0, "count": 7}
     ]
 
 
@@ -58,24 +61,24 @@ def test_manual_overrides_change_spending_total():
     transactions = transactions_response["data"]["transactions"]
     transactions[0]["id"] = "tx-flex"
     transactions[0]["account_name"] = "Everyday Credit Card"
-    transactions[6]["id"] = "tx-fixed"
-    transactions[6]["account_name"] = "Checking"
+    transactions[5]["id"] = "tx-transfer"
+    transactions[5]["account_name"] = "Checking"
 
     snapshot = _patched_snapshot(
         {
             "transactions": {
                 "tx-flex": {"decision": "exclude"},
-                "tx-fixed": {"decision": "include"},
+                "tx-transfer": {"decision": "include"},
             }
         },
         transactions_response,
     )
 
-    assert snapshot["spent"] == 1085.0
+    assert snapshot["spent"] == 3500.0
     assert snapshot["counts"]["overridden"] == 2
     line_by_id = {line["line_id"]: line for line in snapshot["transactions"]}
     assert line_by_id["tx-flex"]["included"] is False
-    assert line_by_id["tx-fixed"]["included"] is True
+    assert line_by_id["tx-transfer"]["included"] is True
 
 
 def test_costco_card_account_name_is_shortened():
@@ -114,6 +117,6 @@ def test_snapshot_counts_uncleared_transactions():
 
     snapshot = _patched_snapshot(transactions_response=transactions_response)
 
-    assert snapshot["counts"]["clearance"]["included"]["uncleared"] == 1
+    assert snapshot["counts"]["clearance"]["included"]["uncleared"] == 2
     assert snapshot["counts"]["clearance"]["included"]["cleared"] == 1
     assert snapshot["counts"]["clearance"]["total"]["uncleared"] == 2
