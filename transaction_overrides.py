@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import hashlib
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 
@@ -22,8 +24,17 @@ def _empty_store() -> dict:
     return {
         "version": 1,
         "transactions": {},
+        "provisional_transactions": {},
         "reprint": {},
     }
+
+
+def _normalize_store(store: dict) -> dict:
+    store.setdefault("version", 1)
+    store.setdefault("transactions", {})
+    store.setdefault("provisional_transactions", {})
+    store.setdefault("reprint", {})
+    return store
 
 
 def _remote_config() -> tuple[str, str] | None:
@@ -72,10 +83,7 @@ def _load_remote_store() -> dict:
     store = json.loads(result)
     if not isinstance(store, dict):
         return _empty_store()
-    store.setdefault("version", 1)
-    store.setdefault("transactions", {})
-    store.setdefault("reprint", {})
-    return store
+    return _normalize_store(store)
 
 
 def _write_remote_store(store: dict) -> None:
@@ -93,10 +101,7 @@ def load_store(path: str = DEFAULT_STORE_PATH) -> dict:
 
     if not isinstance(store, dict):
         return _empty_store()
-    store.setdefault("version", 1)
-    store.setdefault("transactions", {})
-    store.setdefault("reprint", {})
-    return store
+    return _normalize_store(store)
 
 
 def write_store(store: dict, path: str = DEFAULT_STORE_PATH) -> None:
@@ -122,6 +127,106 @@ def write_store(store: dict, path: str = DEFAULT_STORE_PATH) -> None:
 
 def load_overrides(path: str = DEFAULT_STORE_PATH) -> dict:
     return load_store(path)["transactions"]
+
+
+def load_provisional_transactions(path: str = DEFAULT_STORE_PATH) -> dict:
+    return load_store(path)["provisional_transactions"]
+
+
+def _payload_value(payload: dict, key: str, default=None):
+    return payload.get(key, payload.get(key.title(), default))
+
+
+def _clean_text(value, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text if text else fallback
+
+
+def _parse_amount_milliunits(value) -> int:
+    if value is None or value == "":
+        raise ValueError("amount is required")
+
+    if isinstance(value, str):
+        amount_text = value.strip().replace(",", "").replace("$", "")
+        amount_text = amount_text.replace("−", "-")
+        if amount_text.startswith("(") and amount_text.endswith(")"):
+            amount_text = f"-{amount_text[1:-1]}"
+    else:
+        amount_text = str(value)
+
+    try:
+        amount = Decimal(amount_text)
+    except InvalidOperation as exc:
+        raise ValueError("amount must be a number") from exc
+
+    milliunits = int((abs(amount) * Decimal("1000")).quantize(Decimal("1")))
+    if milliunits == 0:
+        raise ValueError("amount must be non-zero")
+    return milliunits
+
+
+def _normalize_occurred_at(value) -> str:
+    text = _clean_text(value)
+    if not text:
+        return _now()
+    return text
+
+
+def _provisional_id(entry: dict) -> str:
+    fingerprint = json.dumps(
+        {
+            "source": entry["source"].casefold(),
+            "merchant": entry["merchant"].casefold(),
+            "card": entry["card"].casefold(),
+            "amount_milliunits": entry["amount_milliunits"],
+            "occurred_at": entry["occurred_at"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:16]
+    return f"prov-{digest}"
+
+
+def record_provisional_transaction(payload: dict, path: str = DEFAULT_STORE_PATH) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("JSON object payload is required")
+
+    occurred_at = _normalize_occurred_at(_payload_value(payload, "occurred_at"))
+    entry = {
+        "source": _clean_text(_payload_value(payload, "source"), "apple_wallet"),
+        "merchant": _clean_text(_payload_value(payload, "merchant"), "Unknown merchant"),
+        "amount_milliunits": _parse_amount_milliunits(_payload_value(payload, "amount")),
+        "card": _clean_text(_payload_value(payload, "card")),
+        "occurred_at": occurred_at,
+        "memo": _clean_text(_payload_value(payload, "memo")),
+        "status": "pending",
+        "raw": payload,
+    }
+    entry["id"] = _provisional_id(entry)
+
+    store = load_store(path)
+    transactions = store["provisional_transactions"]
+    existing = transactions.get(entry["id"])
+    now = _now()
+    if isinstance(existing, dict):
+        existing["last_seen_at"] = now
+        existing["seen_count"] = int(existing.get("seen_count", 1)) + 1
+        existing["raw"] = payload
+        existing["status"] = existing.get("status") or "pending"
+        transactions[entry["id"]] = existing
+        result = existing
+    else:
+        entry["created_at"] = now
+        entry["last_seen_at"] = now
+        entry["seen_count"] = 1
+        transactions[entry["id"]] = entry
+        result = entry
+
+    write_store(store, path)
+    return result
 
 
 def set_decision(line_id: str, decision: str, path: str = DEFAULT_STORE_PATH) -> dict:

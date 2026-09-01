@@ -8,7 +8,7 @@ from api.display import _load_budget_bin
 from api.generate import _generate_summary
 from budget_pace import build_budget_bin
 from dashboard import HTML, _dashboard_key, _dashboard_payload, _manifest_payload, _public_asset, _reprint_token
-from transaction_overrides import load_overrides, record_reprint, set_decision
+from transaction_overrides import load_store, record_provisional_transaction, record_reprint, set_decision
 
 
 class handler(BaseHTTPRequestHandler):
@@ -52,12 +52,15 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
-        if path in {"/api/overrides", "/api/reprint"} and not self._authorized(parsed):
+        protected_paths = {"/api/overrides", "/api/provisional-transaction", "/api/reprint"}
+        if path in protected_paths and not self._authorized(parsed):
             self._send_json(401, {"ok": False, "error": "unauthorized"})
             return
 
         if path == "/api/overrides":
             self._overrides()
+        elif path == "/api/provisional-transaction":
+            self._provisional_transaction()
         elif path == "/api/reprint":
             self._reprint()
         else:
@@ -86,9 +89,16 @@ class handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._error(exc)
 
+    def _provisional_transaction(self) -> None:
+        try:
+            transaction = record_provisional_transaction(self._read_json())
+            self._send_json(200, {"ok": True, "transaction": transaction})
+        except Exception as exc:
+            self._error(exc)
+
     def _reprint(self) -> None:
         try:
-            _, metadata = build_budget_bin({"transactions": load_overrides()})
+            _, metadata = build_budget_bin(load_store())
             reprint = record_reprint(metadata)
             dashboard = _dashboard_payload()
             dashboard["reprint"] = reprint

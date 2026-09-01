@@ -1,7 +1,9 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from transaction_overrides import load_store, record_reprint, set_decision
+import pytest
+
+from transaction_overrides import load_store, record_provisional_transaction, record_reprint, set_decision
 
 
 def test_set_decision_persists_and_auto_removes(tmp_path):
@@ -23,6 +25,50 @@ def test_record_reprint_increments_count(tmp_path):
     assert first["count"] == 1
     assert second["count"] == 2
     assert load_store(path)["reprint"]["metadata"]["bytes"] == 53856
+
+
+def test_record_provisional_transaction_normalizes_payload(tmp_path):
+    path = str(tmp_path / "overrides.json")
+
+    transaction = record_provisional_transaction(
+        {
+            "source": "apple_wallet",
+            "merchant": "Target",
+            "amount": "$42.19",
+            "card": "Apple Card",
+            "occurred_at": "2026-08-27T17:12:00-05:00",
+        },
+        path,
+    )
+
+    store = load_store(path)
+    assert transaction["id"].startswith("prov-")
+    assert transaction["amount_milliunits"] == 42190
+    assert transaction["status"] == "pending"
+    assert transaction["seen_count"] == 1
+    assert store["provisional_transactions"][transaction["id"]]["merchant"] == "Target"
+
+
+def test_record_provisional_transaction_is_idempotent_for_same_payload(tmp_path):
+    path = str(tmp_path / "overrides.json")
+    payload = {
+        "source": "apple_wallet",
+        "merchant": "Coffee Shop",
+        "amount": "7.50",
+        "occurred_at": "2026-08-27T17:12:00-05:00",
+    }
+
+    first = record_provisional_transaction(payload, path)
+    second = record_provisional_transaction(payload, path)
+
+    assert second["id"] == first["id"]
+    assert second["seen_count"] == 2
+    assert len(load_store(path)["provisional_transactions"]) == 1
+
+
+def test_record_provisional_transaction_rejects_missing_amount(tmp_path):
+    with pytest.raises(ValueError, match="amount is required"):
+        record_provisional_transaction({"merchant": "Target"}, str(tmp_path / "overrides.json"))
 
 
 def test_remote_store_uses_upstash_rest_env():
@@ -49,6 +95,7 @@ def test_remote_store_uses_upstash_rest_env():
         store = load_store()
 
     assert store["transactions"]["tx-1"]["decision"] == "exclude"
+    assert store["provisional_transactions"] == {}
     request = mock_urlopen.call_args[0][0]
     assert request.full_url == "https://redis.example.com"
     assert request.headers["Authorization"] == "Bearer token"

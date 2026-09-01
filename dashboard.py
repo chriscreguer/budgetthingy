@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from budget_pace import build_budget_bin, fetch_budget_snapshot
-from transaction_overrides import load_overrides, load_store, record_reprint, set_decision
+from transaction_overrides import load_store, record_provisional_transaction, record_reprint, set_decision
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -750,7 +750,7 @@ HTML = """<!doctype html>
               <option value="all">All</option>
               <option value="included">Included</option>
               <option value="excluded">Excluded</option>
-              <option value="uncleared">Uncleared</option>
+              <option value="uncleared">Pending/Uncleared</option>
               <option value="overridden">Manual</option>
             </select>
           </div>
@@ -828,7 +828,7 @@ HTML = """<!doctype html>
 
     function includesSearch(row, query) {
       if (!query) return true;
-      const haystack = [row.date, row.account, row.payee, row.memo, row.reason, row.cleared].join(" ").toLowerCase();
+      const haystack = [row.date, row.account, row.payee, row.memo, row.reason, row.cleared, row.source].join(" ").toLowerCase();
       return haystack.includes(query);
     }
 
@@ -852,7 +852,9 @@ HTML = """<!doctype html>
       const included = clearance.included || {};
       const includedUncleared = included.uncleared || 0;
       const totalUncleared = total.uncleared || 0;
-      return `${includedUncleared} uncleared included, ${totalUncleared} uncleared total`;
+      const includedPending = included.pending || 0;
+      const totalPending = total.pending || 0;
+      return `${includedPending} pending and ${includedUncleared} uncleared included, ${totalPending} pending and ${totalUncleared} uncleared total`;
     }
 
     function visibleRows() {
@@ -863,7 +865,7 @@ HTML = """<!doctype html>
         if (!includesSearch(row, query)) return false;
         if (filter === "included") return row.included;
         if (filter === "excluded") return !row.included;
-        if (filter === "uncleared") return row.cleared === "uncleared";
+        if (filter === "uncleared") return row.cleared === "uncleared" || row.cleared === "pending";
         if (filter === "overridden") return row.decision !== "auto";
         return true;
       });
@@ -1088,9 +1090,9 @@ HTML = """<!doctype html>
 
 
 def _dashboard_payload() -> dict:
-    overrides = {"transactions": load_overrides()}
-    payload = fetch_budget_snapshot(overrides)
-    payload["reprint"] = load_store().get("reprint", {})
+    store = load_store()
+    payload = fetch_budget_snapshot(store)
+    payload["reprint"] = store.get("reprint", {})
     return payload
 
 
@@ -1114,7 +1116,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif path == "/api/dashboard":
                 self._send_json(200, _dashboard_payload())
             elif path == "/api/display":
-                body, _ = build_budget_bin({"transactions": load_overrides()})
+                body, _ = build_budget_bin(load_store())
                 self._send(
                     200,
                     body,
@@ -1142,8 +1144,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 set_decision(str(payload.get("line_id", "")), str(payload.get("decision", "auto")))
                 self._send_json(200, _dashboard_payload())
+            elif path == "/api/provisional-transaction":
+                transaction = record_provisional_transaction(self._read_json())
+                self._send_json(200, {"ok": True, "transaction": transaction})
             elif path == "/api/reprint":
-                _, metadata = build_budget_bin({"transactions": load_overrides()}, output_dir=ROOT)
+                _, metadata = build_budget_bin(load_store(), output_dir=ROOT)
                 reprint = record_reprint(metadata)
                 dashboard = _dashboard_payload()
                 dashboard["reprint"] = reprint
@@ -1166,7 +1171,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _preview_png(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            _, metadata = build_budget_bin({"transactions": load_overrides()}, output_dir=tmp)
+            _, metadata = build_budget_bin(load_store(), output_dir=tmp)
             with open(metadata["preview_path"], "rb") as f:
                 body = f.read()
         self._send(200, body, "image/png", {"Cache-Control": "no-store"})

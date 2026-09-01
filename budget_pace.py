@@ -2,6 +2,7 @@ import calendar
 import hashlib
 import html
 import os
+import re
 import sys
 import tempfile
 from datetime import date, datetime
@@ -130,6 +131,13 @@ def _override_decision(overrides: dict | None, line_id: str) -> str:
     if isinstance(entry, str):
         return _normalize_decision(entry)
     return "auto"
+
+
+def _store_provisional_transactions(overrides: dict | None) -> dict:
+    if not isinstance(overrides, dict):
+        return {}
+    transactions = overrides.get("provisional_transactions")
+    return transactions if isinstance(transactions, dict) else {}
 
 
 def _fallback_line_id(
@@ -342,6 +350,180 @@ def _transaction_lines(
     return sorted(lines, key=lambda item: (item["date"], item["payee"], item["amount"]), reverse=True)
 
 
+def _parse_iso_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _provisional_date(transaction: dict) -> str:
+    direct_date = _parse_iso_date(transaction.get("date"))
+    if direct_date is not None:
+        return direct_date.isoformat()
+
+    occurred_at = _parse_iso_date(transaction.get("occurred_at"))
+    if occurred_at is not None:
+        return occurred_at.isoformat()
+
+    return date.today().isoformat()
+
+
+_GENERIC_MATCH_WORDS = {
+    "card",
+    "checkout",
+    "inc",
+    "llc",
+    "market",
+    "online",
+    "pay",
+    "payment",
+    "purchase",
+    "store",
+    "the",
+}
+
+
+def _match_words(value: str | None) -> set[str]:
+    words = set(re.findall(r"[a-z0-9]+", (value or "").casefold()))
+    return {word for word in words if len(word) >= 4 and word not in _GENERIC_MATCH_WORDS}
+
+
+def _similar_text(left: str | None, right: str | None) -> bool:
+    left_words = _match_words(left)
+    right_words = _match_words(right)
+    if not left_words or not right_words:
+        return False
+
+    left_joined = " ".join(sorted(left_words))
+    right_joined = " ".join(sorted(right_words))
+    return bool(
+        left_words & right_words
+        or left_joined in right_joined
+        or right_joined in left_joined
+    )
+
+
+def _known_account(account: str | None) -> bool:
+    return bool(account and account != "Unknown account")
+
+
+def _matches_ynab_line(provisional: dict, ynab_line: dict) -> bool:
+    if ynab_line.get("provisional"):
+        return False
+
+    try:
+        provisional_amount = int(provisional.get("amount_milliunits", 0))
+        ynab_amount = int(ynab_line.get("amount_milliunits", 0))
+    except (TypeError, ValueError):
+        return False
+    if provisional_amount <= 0 or provisional_amount != ynab_amount:
+        return False
+
+    provisional_date = _parse_iso_date(_provisional_date(provisional))
+    ynab_date = _parse_iso_date(ynab_line.get("date"))
+    if provisional_date is None or ynab_date is None:
+        return False
+    if abs((provisional_date - ynab_date).days) > 10:
+        return False
+
+    if not _similar_text(provisional.get("merchant"), ynab_line.get("payee")):
+        return False
+
+    card = provisional.get("card")
+    account = ynab_line.get("account")
+    if card and _known_account(account) and not _similar_text(card, account):
+        return False
+
+    return True
+
+
+def _matching_ynab_line(provisional: dict, ynab_lines: list[dict]) -> dict | None:
+    for line in ynab_lines:
+        if _matches_ynab_line(provisional, line):
+            return line
+    return None
+
+
+def _provisional_line(
+    transaction: dict,
+    ynab_lines: list[dict],
+    overrides: dict | None,
+) -> dict | None:
+    try:
+        amount_milliunits = int(transaction.get("amount_milliunits", 0))
+    except (TypeError, ValueError):
+        return None
+    if amount_milliunits <= 0:
+        return None
+
+    line_id = str(transaction.get("id") or _fallback_line_id(transaction, 0))
+    matched_line = _matching_ynab_line(transaction, ynab_lines)
+    default_included = matched_line is None
+    default_reason = "pending" if default_included else "matched ynab"
+    decision = _override_decision(overrides, line_id)
+    included = default_included
+    reason = default_reason
+    if decision == "include":
+        included = True
+        reason = "manual include"
+    elif decision == "exclude":
+        included = False
+        reason = "manual exclude"
+
+    source = _display_text(transaction.get("source"), "provisional")
+    memo = _display_text(transaction.get("memo")) or f"source={source}"
+    return {
+        "line_id": line_id,
+        "transaction_id": "",
+        "subtransaction_id": "",
+        "date": _provisional_date(transaction),
+        "payee": _display_text(transaction.get("merchant"), "Unknown merchant"),
+        "memo": memo,
+        "account": _display_account_name(transaction.get("card")) if transaction.get("card") else "Wallet",
+        "amount": _milliunits_to_dollars(amount_milliunits),
+        "amount_milliunits": amount_milliunits,
+        "category_id": "",
+        "category": "Pending",
+        "category_group": "Provisional",
+        "default_included": default_included,
+        "included": included,
+        "decision": decision,
+        "reason": reason,
+        "cleared": "pending",
+        "approved": False,
+        "provisional": True,
+        "source": source,
+        "matched_transaction_id": (matched_line or {}).get("transaction_id") or (matched_line or {}).get("line_id", ""),
+    }
+
+
+def _provisional_lines(
+    provisional_transactions: dict,
+    today: date,
+    ynab_lines: list[dict],
+    overrides: dict | None,
+) -> list[dict]:
+    lines = []
+    for transaction in provisional_transactions.values():
+        if not isinstance(transaction, dict):
+            continue
+        if transaction.get("deleted"):
+            continue
+        transaction_date = {"date": _provisional_date(transaction)}
+        if not _is_current_month(transaction_date, today):
+            continue
+        line = _provisional_line(transaction, ynab_lines, overrides)
+        if line is not None:
+            lines.append(line)
+    return lines
+
+
 def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = None) -> dict:
     """Returns detailed budget pace data with per-purchase inclusion decisions."""
     today = today or date.today()
@@ -350,11 +532,22 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
     budget_categories, category_lookup = _category_context(groups)
 
     transactions = _fetch_ynab_transactions(headers, today)
-    lines = _transaction_lines(
+    ynab_lines = _transaction_lines(
         transactions,
         today,
         category_lookup,
         overrides,
+    )
+    provisional_lines = _provisional_lines(
+        _store_provisional_transactions(overrides),
+        today,
+        ynab_lines,
+        overrides,
+    )
+    lines = sorted(
+        ynab_lines + provisional_lines,
+        key=lambda item: (item["date"], item["payee"], item["amount"]),
+        reverse=True,
     )
     spent = sum(line["amount"] for line in lines if line["included"])
     assigned = (
@@ -491,7 +684,7 @@ def progress_bar_metrics(assigned: float, spent: float, expected: float) -> dict
 
 
 def _clearance_counts(lines: list[dict]) -> dict[str, dict[str, int]]:
-    statuses = ("cleared", "uncleared", "reconciled", "unknown")
+    statuses = ("cleared", "uncleared", "pending", "reconciled", "unknown")
     counts = {
         "total": dict.fromkeys(statuses, 0),
         "included": dict.fromkeys(statuses, 0),

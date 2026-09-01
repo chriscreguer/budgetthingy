@@ -2,7 +2,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from budget_pace import fetch_budget_snapshot
-from tests.test_fetch import MOCK_CATEGORIES_RESPONSE, MOCK_TRANSACTIONS_RESPONSE, _mock_get
+from tests.test_fetch import THIS_MONTH, MOCK_CATEGORIES_RESPONSE, MOCK_TRANSACTIONS_RESPONSE, _mock_get
 
 
 def _patched_snapshot(overrides=None, transactions_response=None):
@@ -32,12 +32,14 @@ def test_snapshot_exposes_purchase_lines_and_category_totals():
             "total": {
                 "cleared": 0,
                 "uncleared": 0,
+                "pending": 0,
                 "reconciled": 0,
                 "unknown": 9,
             },
             "included": {
                 "cleared": 0,
                 "uncleared": 0,
+                "pending": 0,
                 "reconciled": 0,
                 "unknown": 7,
             },
@@ -120,3 +122,63 @@ def test_snapshot_counts_uncleared_transactions():
     assert snapshot["counts"]["clearance"]["included"]["uncleared"] == 2
     assert snapshot["counts"]["clearance"]["included"]["cleared"] == 1
     assert snapshot["counts"]["clearance"]["total"]["uncleared"] == 2
+
+
+def test_snapshot_includes_unmatched_provisional_transactions():
+    snapshot = _patched_snapshot(
+        {
+            "transactions": {},
+            "provisional_transactions": {
+                "prov-target": {
+                    "id": "prov-target",
+                    "source": "apple_wallet",
+                    "merchant": "Target",
+                    "amount_milliunits": 12340,
+                    "card": "Apple Card",
+                    "occurred_at": f"{THIS_MONTH}T12:00:00-05:00",
+                },
+            },
+        }
+    )
+
+    assert snapshot["spent"] == 2052.34
+    assert snapshot["counts"]["included"] == 8
+    assert snapshot["counts"]["total"] == 10
+    assert snapshot["counts"]["clearance"]["included"]["pending"] == 1
+    provisional = next(line for line in snapshot["transactions"] if line["line_id"] == "prov-target")
+    assert provisional["included"] is True
+    assert provisional["reason"] == "pending"
+    assert provisional["cleared"] == "pending"
+    assert provisional["category"] == "Pending"
+
+
+def test_snapshot_excludes_provisional_transaction_when_ynab_line_matches():
+    transactions_response = deepcopy(MOCK_TRANSACTIONS_RESPONSE)
+    transaction = transactions_response["data"]["transactions"][0]
+    transaction["id"] = "ynab-target"
+    transaction["amount"] = -12_340
+    transaction["payee_name"] = "Target Store"
+    transaction["account_name"] = "Apple Card"
+
+    snapshot = _patched_snapshot(
+        {
+            "transactions": {},
+            "provisional_transactions": {
+                "prov-target": {
+                    "id": "prov-target",
+                    "source": "apple_wallet",
+                    "merchant": "Target",
+                    "amount_milliunits": 12340,
+                    "card": "Apple Card",
+                    "occurred_at": f"{THIS_MONTH}T12:00:00-05:00",
+                },
+            },
+        },
+        transactions_response,
+    )
+
+    provisional = next(line for line in snapshot["transactions"] if line["line_id"] == "prov-target")
+    assert snapshot["spent"] == 2012.34
+    assert provisional["included"] is False
+    assert provisional["reason"] == "matched ynab"
+    assert provisional["matched_transaction_id"] == "ynab-target"
