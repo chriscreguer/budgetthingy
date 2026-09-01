@@ -1163,6 +1163,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 )
             else:
                 self._send_json(404, {"ok": False, "error": "not found"})
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": str(exc)})
 

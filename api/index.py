@@ -93,6 +93,8 @@ class handler(BaseHTTPRequestHandler):
         try:
             transaction = record_provisional_transaction(self._read_json())
             self._send_json(200, {"ok": True, "transaction": transaction})
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._error(exc)
 
