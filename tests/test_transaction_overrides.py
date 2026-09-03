@@ -3,7 +3,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from transaction_overrides import load_store, record_provisional_transaction, record_reprint, set_decision
+from transaction_overrides import (
+    load_provisional_attempts,
+    load_store,
+    record_provisional_attempt,
+    record_provisional_transaction,
+    record_reprint,
+    set_decision,
+)
 
 
 def test_set_decision_persists_and_auto_removes(tmp_path):
@@ -71,6 +78,36 @@ def test_record_provisional_transaction_rejects_missing_amount(tmp_path):
         record_provisional_transaction({"merchant": "Target"}, str(tmp_path / "overrides.json"))
 
 
+def test_record_provisional_attempt_appends_attempts(tmp_path):
+    path = str(tmp_path / "overrides.json")
+
+    first = record_provisional_attempt({"merchant": "Target"}, "rejected", error="amount is required", path=path)
+    second = record_provisional_attempt(
+        {"merchant": "Coffee", "amount": "4.50"},
+        "accepted",
+        transaction_id="prov-123",
+        path=path,
+    )
+
+    attempts = load_provisional_attempts(path)
+    assert first["status"] == "rejected"
+    assert first["error"] == "amount is required"
+    assert second["transaction_id"] == "prov-123"
+    assert [attempt["status"] for attempt in attempts] == ["rejected", "accepted"]
+
+
+def test_record_provisional_attempt_keeps_recent_attempts(tmp_path):
+    path = str(tmp_path / "overrides.json")
+
+    with patch("transaction_overrides.PROVISIONAL_ATTEMPT_LIMIT", 2):
+        record_provisional_attempt({"attempt": 1}, "rejected", path=path)
+        record_provisional_attempt({"attempt": 2}, "rejected", path=path)
+        record_provisional_attempt({"attempt": 3}, "rejected", path=path)
+
+    attempts = load_provisional_attempts(path)
+    assert [attempt["payload"]["attempt"] for attempt in attempts] == [2, 3]
+
+
 def test_remote_store_uses_upstash_rest_env():
     response = MagicMock()
     response.__enter__.return_value.read.return_value = json.dumps(
@@ -79,6 +116,7 @@ def test_remote_store_uses_upstash_rest_env():
                 {
                     "version": 1,
                     "transactions": {"tx-1": {"decision": "exclude"}},
+                    "provisional_attempts": [{"status": "accepted"}],
                     "reprint": {},
                 }
             )
@@ -96,6 +134,7 @@ def test_remote_store_uses_upstash_rest_env():
 
     assert store["transactions"]["tx-1"]["decision"] == "exclude"
     assert store["provisional_transactions"] == {}
+    assert store["provisional_attempts"] == [{"status": "accepted"}]
     request = mock_urlopen.call_args[0][0]
     assert request.full_url == "https://redis.example.com"
     assert request.headers["Authorization"] == "Bearer token"

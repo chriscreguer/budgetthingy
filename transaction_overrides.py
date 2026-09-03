@@ -14,6 +14,7 @@ DEFAULT_STORE_PATH = os.environ.get(
 )
 STORE_KEY = os.environ.get("BUDGET_DASHBOARD_STORE_KEY", "budget-display:transaction-overrides")
 VALID_DECISIONS = {"auto", "include", "exclude"}
+PROVISIONAL_ATTEMPT_LIMIT = int(os.environ.get("PROVISIONAL_ATTEMPT_LIMIT", "25"))
 
 
 def _now() -> str:
@@ -25,6 +26,7 @@ def _empty_store() -> dict:
         "version": 1,
         "transactions": {},
         "provisional_transactions": {},
+        "provisional_attempts": [],
         "reprint": {},
     }
 
@@ -33,6 +35,7 @@ def _normalize_store(store: dict) -> dict:
     store.setdefault("version", 1)
     store.setdefault("transactions", {})
     store.setdefault("provisional_transactions", {})
+    store.setdefault("provisional_attempts", [])
     store.setdefault("reprint", {})
     return store
 
@@ -133,6 +136,11 @@ def load_provisional_transactions(path: str = DEFAULT_STORE_PATH) -> dict:
     return load_store(path)["provisional_transactions"]
 
 
+def load_provisional_attempts(path: str = DEFAULT_STORE_PATH) -> list[dict]:
+    attempts = load_store(path)["provisional_attempts"]
+    return attempts if isinstance(attempts, list) else []
+
+
 def _payload_value(payload: dict, key: str, default=None):
     return payload.get(key, payload.get(key.title(), default))
 
@@ -227,6 +235,32 @@ def record_provisional_transaction(payload: dict, path: str = DEFAULT_STORE_PATH
 
     write_store(store, path)
     return result
+
+
+def record_provisional_attempt(
+    payload: dict,
+    status: str,
+    error: str = "",
+    transaction_id: str = "",
+    path: str = DEFAULT_STORE_PATH,
+) -> dict:
+    store = load_store(path)
+    attempts = store["provisional_attempts"]
+    if not isinstance(attempts, list):
+        attempts = []
+        store["provisional_attempts"] = attempts
+
+    attempt = {
+        "received_at": _now(),
+        "status": status,
+        "error": error,
+        "transaction_id": transaction_id,
+        "payload": payload if isinstance(payload, dict) else {},
+    }
+    attempts.append(attempt)
+    del attempts[:-PROVISIONAL_ATTEMPT_LIMIT]
+    write_store(store, path)
+    return attempt
 
 
 def set_decision(line_id: str, decision: str, path: str = DEFAULT_STORE_PATH) -> dict:

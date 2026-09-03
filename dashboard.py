@@ -6,7 +6,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from budget_pace import build_budget_bin, fetch_budget_snapshot
-from transaction_overrides import load_store, record_provisional_transaction, record_reprint, set_decision
+from transaction_overrides import (
+    load_provisional_attempts,
+    load_store,
+    record_provisional_attempt,
+    record_provisional_transaction,
+    record_reprint,
+    set_decision,
+)
 
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -1115,6 +1122,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send(body=body, status=200, content_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
             elif path == "/api/dashboard":
                 self._send_json(200, _dashboard_payload())
+            elif path == "/api/provisional-attempts":
+                self._send_json(200, {"ok": True, "attempts": load_provisional_attempts()})
             elif path == "/api/display":
                 body, _ = build_budget_bin(load_store())
                 self._send(
@@ -1139,13 +1148,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
+        payload = {}
         try:
             if path == "/api/overrides":
                 payload = self._read_json()
                 set_decision(str(payload.get("line_id", "")), str(payload.get("decision", "auto")))
                 self._send_json(200, _dashboard_payload())
             elif path == "/api/provisional-transaction":
-                transaction = record_provisional_transaction(self._read_json())
+                payload = self._read_json()
+                transaction = record_provisional_transaction(payload)
+                self._record_provisional_attempt(payload, "accepted", transaction_id=transaction["id"])
                 self._send_json(200, {"ok": True, "transaction": transaction})
             elif path == "/api/reprint":
                 _, metadata = build_budget_bin(load_store(), output_dir=ROOT)
@@ -1164,9 +1176,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(404, {"ok": False, "error": "not found"})
         except ValueError as exc:
+            if path == "/api/provisional-transaction":
+                self._record_provisional_attempt(payload, "rejected", error=str(exc))
             self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._send_json(500, {"ok": False, "error": str(exc)})
+
+    def _record_provisional_attempt(
+        self,
+        payload: dict,
+        status: str,
+        error: str = "",
+        transaction_id: str = "",
+    ) -> None:
+        try:
+            record_provisional_attempt(payload, status, error=error, transaction_id=transaction_id)
+        except Exception:
+            pass
 
     def log_message(self, format: str, *args) -> None:
         print(f"{self.address_string()} - {format % args}", flush=True)

@@ -8,7 +8,14 @@ from api.display import _load_budget_bin
 from api.generate import _generate_summary
 from budget_pace import build_budget_bin
 from dashboard import HTML, _dashboard_key, _dashboard_payload, _manifest_payload, _public_asset, _reprint_token
-from transaction_overrides import load_store, record_provisional_transaction, record_reprint, set_decision
+from transaction_overrides import (
+    load_provisional_attempts,
+    load_store,
+    record_provisional_attempt,
+    record_provisional_transaction,
+    record_reprint,
+    set_decision,
+)
 
 
 class handler(BaseHTTPRequestHandler):
@@ -35,6 +42,11 @@ class handler(BaseHTTPRequestHandler):
                 self._send_json(401, {"ok": False, "error": "unauthorized"})
                 return
             self._dashboard()
+        elif path == "/api/provisional-attempts":
+            if not self._authorized(parsed):
+                self._send_json(401, {"ok": False, "error": "unauthorized"})
+                return
+            self._provisional_attempts()
         elif path == "/api/reprint-token":
             self._send(
                 200,
@@ -90,11 +102,33 @@ class handler(BaseHTTPRequestHandler):
             self._error(exc)
 
     def _provisional_transaction(self) -> None:
+        payload = {}
         try:
-            transaction = record_provisional_transaction(self._read_json())
+            payload = self._read_json()
+            transaction = record_provisional_transaction(payload)
+            self._record_provisional_attempt(payload, "accepted", transaction_id=transaction["id"])
             self._send_json(200, {"ok": True, "transaction": transaction})
         except ValueError as exc:
+            self._record_provisional_attempt(payload, "rejected", error=str(exc))
             self._send_json(400, {"ok": False, "error": str(exc)})
+        except Exception as exc:
+            self._error(exc)
+
+    def _record_provisional_attempt(
+        self,
+        payload: dict,
+        status: str,
+        error: str = "",
+        transaction_id: str = "",
+    ) -> None:
+        try:
+            record_provisional_attempt(payload, status, error=error, transaction_id=transaction_id)
+        except Exception:
+            pass
+
+    def _provisional_attempts(self) -> None:
+        try:
+            self._send_json(200, {"ok": True, "attempts": load_provisional_attempts()})
         except Exception as exc:
             self._error(exc)
 
