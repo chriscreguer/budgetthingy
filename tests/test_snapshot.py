@@ -152,7 +152,7 @@ def test_snapshot_includes_unmatched_provisional_transactions():
     assert provisional["category"] == "Pending"
 
 
-def test_snapshot_excludes_provisional_transaction_when_ynab_line_matches():
+def test_snapshot_hides_provisional_transaction_when_ynab_line_matches():
     transactions_response = deepcopy(MOCK_TRANSACTIONS_RESPONSE)
     transaction = transactions_response["data"]["transactions"][0]
     transaction["id"] = "ynab-target"
@@ -177,8 +177,7 @@ def test_snapshot_excludes_provisional_transaction_when_ynab_line_matches():
         transactions_response,
     )
 
-    provisional = next(line for line in snapshot["transactions"] if line["line_id"] == "prov-target")
     assert snapshot["spent"] == 2012.34
-    assert provisional["included"] is False
-    assert provisional["reason"] == "matched ynab"
-    assert provisional["matched_transaction_id"] == "ynab-target"
+    assert snapshot["counts"]["total"] == 9
+    assert "prov-target" not in {line["line_id"] for line in snapshot["transactions"]}
+    assert any(line["transaction_id"] == "ynab-target" for line in snapshot["transactions"])
