@@ -181,3 +181,33 @@ def test_snapshot_hides_provisional_transaction_when_ynab_line_matches():
     assert snapshot["counts"]["total"] == 9
     assert "prov-target" not in {line["line_id"] for line in snapshot["transactions"]}
     assert any(line["transaction_id"] == "ynab-target" for line in snapshot["transactions"])
+
+
+def test_snapshot_hides_matched_provisional_even_with_manual_override():
+    transactions_response = deepcopy(MOCK_TRANSACTIONS_RESPONSE)
+    transaction = transactions_response["data"]["transactions"][0]
+    transaction["id"] = "ynab-target"
+    transaction["amount"] = -12_340
+    transaction["payee_name"] = "Target Store"
+    transaction["account_name"] = "Apple Card"
+
+    snapshot = _patched_snapshot(
+        {
+            "transactions": {"prov-target": {"decision": "exclude"}},
+            "provisional_transactions": {
+                "prov-target": {
+                    "id": "prov-target",
+                    "source": "apple_wallet",
+                    "merchant": "Target",
+                    "amount_milliunits": 12340,
+                    "card": "Apple Card",
+                    "occurred_at": f"{THIS_MONTH}T12:00:00-05:00",
+                },
+            },
+        },
+        transactions_response,
+    )
+
+    assert snapshot["spent"] == 2012.34
+    assert snapshot["counts"]["total"] == 9
+    assert "prov-target" not in {line["line_id"] for line in snapshot["transactions"]}

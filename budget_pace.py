@@ -519,9 +519,7 @@ def _provisional_lines(
         if not _is_current_month(transaction_date, today):
             continue
         line = _provisional_line(transaction, ynab_lines, overrides)
-        if line is not None and not (
-            line.get("matched_transaction_id") and line.get("decision") == "auto"
-        ):
+        if line is not None and not line.get("matched_transaction_id"):
             lines.append(line)
     return lines
 
