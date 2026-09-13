@@ -264,9 +264,9 @@ def _fetch_ynab_accounts(headers: dict[str, str]) -> list[dict]:
 
 
 def _fetch_ynab_transactions(headers: dict[str, str], today: date) -> list[dict]:
-    # Reaches back to the start of last month so the savings figures can be
-    # computed from the same response the pace math already needs.
-    since_date = savings.savings_since_date(today)
+    # Reaches back far enough to cover the savings chart window, so the pace
+    # math and every month of savings come from one response.
+    since_date = savings.history_since_date(today)
     transactions_url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/transactions"
     transactions_resp = requests.get(
         transactions_url,
@@ -643,6 +643,7 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
         "savings": {
             "last_month": savings_summary["last_month"],
             "this_month": savings_summary["this_month"],
+            "history": savings_summary["history"],
         },
         "expected": expected,
         "remaining": assigned - spent,

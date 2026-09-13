@@ -175,10 +175,12 @@ def test_savings_since_date_covers_the_start_of_last_month():
     assert savings_since_date(date(2026, 1, 15)) == "2025-12-01"
 
 
+# The card account name carries a non-breaking space, as YNAB stores it.
 CARD_ACCOUNTS = [
-    {"id": "acct-card", "name": "Apple Card", "type": "creditCard"},
-    {"id": "acct-checking", "name": "Share Draft", "type": "checking"},
-    {"id": "acct-savings", "name": "Savings", "type": "savings"},
+    {"id": "acct-card", "name": "Apple Card", "type": "creditCard", "on_budget": True},
+    {"id": "acct-checking", "name": "Share Draft", "type": "checking", "on_budget": True},
+    {"id": "acct-savings", "name": "Savings", "type": "savings", "on_budget": True},
+    {"id": "acct-brokerage", "name": "Robinhood Brokerage", "type": "otherAsset", "on_budget": False},
 ]
 
 
@@ -402,3 +404,180 @@ def test_refund_must_land_on_the_account_that_paid():
 
     assert income == 46.84
     assert spending == 46.84
+
+
+def _month_series(summary):
+    return [(row["month"], row["saved"]) for row in summary["history"]]
+
+
+def test_history_lists_one_row_per_month_in_order():
+    transactions = [
+        _transaction("2026-07-01", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-07-10", -1_000_000, payee_name="Rent", account_id="acct-checking"),
+        _transaction("2026-08-01", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-10", -2_000_000, payee_name="Rent", account_id="acct-checking"),
+        _transaction("2026-09-01", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS, history_months=3
+    )
+
+    assert _month_series(summary) == [("2026-07", 2000.0), ("2026-08", 1000.0), ("2026-09", 3000.0)]
+
+
+def test_history_keeps_negative_months_so_overspending_is_visible():
+    transactions = [
+        _transaction("2026-08-01", 1_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-10", -1_800_000, payee_name="Rent", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS, history_months=2
+    )
+
+    assert _month_series(summary) == [("2026-08", -800.0), ("2026-09", 0.0)]
+    # The tile still floors at zero; only the chart shows the true shape.
+    assert summary["saved_last_month"] == 0.0
+
+
+def test_history_marks_the_current_month_as_partial():
+    transactions = [
+        _transaction("2026-08-01", 1_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-09-01", 1_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS, history_months=2
+    )
+
+    assert [row["partial"] for row in summary["history"]] == [False, True]
+
+
+def test_history_with_no_activity_at_all_keeps_the_current_month():
+    summary = savings_summary([], today=date(2026, 9, 10), accounts=None, history_months=6)
+
+    assert [row["month"] for row in summary["history"]] == ["2026-09"]
+
+
+def test_history_spans_a_year_boundary():
+    transactions = [
+        _transaction("2025-12-05", 500_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 1, 15), accounts=CARD_ACCOUNTS, history_months=2
+    )
+
+    assert _month_series(summary) == [("2025-12", 500.0), ("2026-01", 0.0)]
+
+
+def test_history_drops_leading_months_with_no_activity():
+    # Months before the budget existed should not render as flat zero bars.
+    transactions = [
+        _transaction("2026-08-01", 1_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS, history_months=6
+    )
+
+    assert [row["month"] for row in summary["history"]] == ["2026-08", "2026-09"]
+
+
+def test_history_keeps_interior_months_with_no_activity():
+    transactions = [
+        _transaction("2026-07-01", 1_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-09-01", 1_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS, history_months=3
+    )
+
+    assert [row["month"] for row in summary["history"]] == ["2026-07", "2026-08", "2026-09"]
+
+
+def test_history_rows_carry_income_and_spending():
+    transactions = [
+        _transaction("2026-08-01", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-10", -1_200_000, payee_name="Rent", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS, history_months=2
+    )
+
+    august = summary["history"][0]
+    assert august == {
+        "month": "2026-08",
+        "income": 3000.0,
+        "spending": 1200.0,
+        "saved": 1800.0,
+        "partial": False,
+        "income_missing": False,
+    }
+
+
+def test_history_since_date_covers_the_whole_window():
+    assert savings_since_date(date(2026, 9, 10), months_back=11) == "2025-10-01"
+    assert savings_since_date(date(2026, 9, 10)) == "2026-08-01"
+
+
+def test_off_budget_accounts_are_not_cash_flow():
+    # A brokerage is outside the budget. Its movements are not household income
+    # or spending, and its reconciliation adjustments are pure bookkeeping.
+    transactions = [
+        _transaction("2026-08-02", 27_259_950, payee_name="Reconciliation Balance Adjustment", account_id="acct-brokerage"),
+        _transaction("2026-08-03", -5_000_000, payee_name="Stock Purchase", account_id="acct-brokerage"),
+        _transaction("2026-08-04", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (3000.0, 0.0)
+
+
+def test_balance_adjustments_are_not_cash_flow():
+    transactions = [
+        _transaction("2026-08-02", 900_000, payee_name="Starting Balance", account_id="acct-checking"),
+        _transaction("2026-08-03", 500_000, payee_name="Manual Balance Adjustment", account_id="acct-savings"),
+        _transaction("2026-08-04", -250_000, payee_name="Reconciliation Balance Adjustment", account_id="acct-checking"),
+        _transaction("2026-08-05", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (3000.0, 0.0)
+
+
+def test_bank_imported_transfers_are_not_cash_flow():
+    # Movement between the user's own accounts that YNAB did not link.
+    transactions = [
+        _transaction("2026-08-02", 7_000_000, payee_name="Deposit transfer From account *732", account_id="acct-checking"),
+        _transaction("2026-08-03", -7_000_000, payee_name="Transfer to Savings", account_id="acct-checking"),
+        _transaction("2026-08-04", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (3000.0, 0.0)
+
+
+def test_inflow_named_after_a_card_is_not_income():
+    transactions = [
+        _transaction("2026-08-02", 7_050_460, payee_name="Apple Card", account_id="acct-checking"),
+        _transaction("2026-08-04", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (3000.0, 0.0)
+
+
+def test_history_flags_months_with_spending_but_no_recorded_income():
+    # No income on record is missing data, not a month of pure overspending.
+    transactions = [
+        _transaction("2026-07-10", -1_200_000, payee_name="Rent", account_id="acct-checking"),
+        _transaction("2026-08-01", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-10", -1_200_000, payee_name="Rent", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(
+        transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS, history_months=3
+    )
+    flags = {row["month"]: row["income_missing"] for row in summary["history"]}
+
+    assert flags == {"2026-07": True, "2026-08": False, "2026-09": False}

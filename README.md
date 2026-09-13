@@ -31,6 +31,7 @@ Optional:
 ```text
 EXCLUDED_PAYEE_PATTERNS=Withdrawal
 FLEXIBLE_BUDGET=0
+SAVINGS_HISTORY_MONTHS=12
 DASHBOARD_KEY=...
 UPSTASH_REDIS_REST_URL=...
 UPSTASH_REDIS_REST_TOKEN=...
@@ -129,6 +130,14 @@ data/transaction_overrides.json
 The `Assigned` tile is editable: click `Edit`, type a new monthly budget, and
 press Enter (Escape cancels).
 
+A `Savings by month` chart sits below the progress bar, one bar per month of
+net savings (income minus spending). Teal is a month that saved, red a month
+that overspent, and grey a month with spending but no income on record, which is
+missing data rather than pure overspending. The current month is hatched because
+it is still in progress. Hover a bar for its income, spending and net, or use
+`Table` for the same numbers as text. The window is `SAVINGS_HISTORY_MONTHS`
+months (default 12) and leading months with no activity are dropped.
+
 Two savings tiles sit beside it:
 
 - **Saved Last Month** - last month's income minus last month's spending,
@@ -149,6 +158,16 @@ bank imports as two ordinary transactions are caught using account types from
   `autopay`, `bill pay`), and otherwise a refund.
 - An outflow whose payee names one of those card accounts is a card payoff, not
   spending, because the purchases were already counted on the card itself.
+
+Three more kinds of movement are not household cash flow and are skipped in both
+directions:
+
+- Anything on an account with `on_budget: false`, such as a brokerage. Its
+  reconciliation adjustments would otherwise read as enormous income.
+- Balance adjustments (`starting balance`, `balance adjustment`,
+  `reconciliation`), which are YNAB bookkeeping.
+- Payees naming a transfer, which is how a bank imports movement between the
+  user's own accounts when YNAB does not link it.
 
 Account-name matching normalizes whitespace, since YNAB stores names like
 `Apple<nbsp>Card` with a non-breaking space that plain matching misses.

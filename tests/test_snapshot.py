@@ -285,7 +285,8 @@ def test_snapshot_exposes_savings_fields():
     assert "projected_savings" in snapshot
     assert snapshot["saved_last_month"] >= 0.0
     assert snapshot["projected_savings"] >= 0.0
-    assert set(snapshot["savings"]) == {"last_month", "this_month"}
+    assert set(snapshot["savings"]) == {"last_month", "this_month", "history"}
+    assert snapshot["savings"]["history"][-1]["partial"] is True
 
 
 def test_savings_ignore_manual_overrides():

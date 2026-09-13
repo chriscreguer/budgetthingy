@@ -291,6 +291,105 @@ HTML = """<!doctype html>
       outline: none;
       border-bottom-color: var(--accent-strong);
     }
+    .chart-panel {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .chart-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .chart-head h2 { margin: 0; font-size: 15px; }
+    .chart-legend {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .chart-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .chart-wrap { position: relative; }
+    .chart-wrap svg { display: block; width: 100%; }
+    .chart-tip {
+      position: absolute;
+      pointer-events: none;
+      z-index: 5;
+      min-width: 150px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--table-head);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+      font-size: 12px;
+      transform: translate(-50%, -100%);
+    }
+    .chart-tip[hidden] { display: none; }
+    .chart-tip .tip-month {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .chart-tip .tip-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      color: var(--muted);
+    }
+    .chart-tip .tip-row b {
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .chart-tip .tip-note {
+      margin-top: 4px;
+      color: var(--amber);
+    }
+    .chart-bar { cursor: default; }
+    .chart-table { margin-top: 12px; }
+    .chart-table[hidden] { display: none; }
+    .chart-table table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+    }
+    .chart-table th, .chart-table td {
+      padding: 5px 8px;
+      text-align: right;
+      border-bottom: 1px solid var(--row-line);
+    }
+    .chart-table th:first-child, .chart-table td:first-child { text-align: left; }
+    .chart-table th {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .link-button {
+      height: auto;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--control);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .link-button:hover { color: var(--text); border-color: var(--accent); }
     .status {
       min-height: 22px;
       color: var(--muted);
@@ -796,6 +895,22 @@ HTML = """<!doctype html>
         <span id="progressAssignedLabel">-</span>
       </div>
     </section>
+    <section class="chart-panel" aria-label="Savings by month">
+      <div class="chart-head">
+        <h2>Savings by month</h2>
+        <div class="chart-legend">
+          <span><i class="swatch" style="background: #0d9488"></i>Saved</span>
+          <span><i class="swatch" style="background: #ef4444"></i>Overspent</span>
+          <span><i class="swatch" style="background: var(--muted)"></i>No income recorded</span>
+          <button type="button" class="link-button" id="chartTableButton" aria-expanded="false">Table</button>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <svg id="savingsChart" role="img" aria-label="Net savings for each month"></svg>
+        <div class="chart-tip" id="chartTip" hidden></div>
+      </div>
+      <div class="chart-table" id="chartTable" hidden></div>
+    </section>
     <p class="status" id="statusLine"></p>
     <section class="layout">
       <div class="panel">
@@ -881,6 +996,10 @@ HTML = """<!doctype html>
       accountList: document.getElementById("accountList"),
       searchInput: document.getElementById("searchInput"),
       filterSelect: document.getElementById("filterSelect"),
+      savingsChart: document.getElementById("savingsChart"),
+      chartTip: document.getElementById("chartTip"),
+      chartTable: document.getElementById("chartTable"),
+      chartTableButton: document.getElementById("chartTableButton"),
       refreshButton: document.getElementById("refreshButton"),
       reprintButton: document.getElementById("reprintButton")
     };
@@ -1156,8 +1275,191 @@ HTML = """<!doctype html>
       }
     }
 
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    // Drawn at true pixel size rather than a scaled viewBox, so labels stay
+    // legible on a phone instead of shrinking with the container.
+    const CHART = {
+      h: 200, top: 12, right: 8, bottom: 26, left: 62,
+      gap: 8, maxBar: 44, radius: 4, minSlotForLabel: 34,
+      saved: "#0d9488", overspent: "#ef4444", missing: "#8a96a3"
+    };
+
+    function svgEl(name, attrs = {}) {
+      const node = document.createElementNS(SVG_NS, name);
+      for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+      return node;
+    }
+
+    // Rounds only the data end of a bar, leaving the baseline end square so the
+    // bar reads as anchored to zero.
+    function barPath(x, y, w, h, r, up) {
+      const radius = Math.max(0, Math.min(r, w / 2, h));
+      if (up) {
+        return `M${x},${y + h}V${y + radius}a${radius},${radius} 0 0 1 ${radius},${-radius}h${w - 2 * radius}a${radius},${radius} 0 0 1 ${radius},${radius}V${y + h}Z`;
+      }
+      return `M${x},${y}V${y + h - radius}a${radius},${radius} 0 0 0 ${radius},${radius}h${w - 2 * radius}a${radius},${radius} 0 0 0 ${radius},${-radius}V${y}Z`;
+    }
+
+    function niceStep(span) {
+      if (span <= 0) return 1;
+      const raw = span / 4;
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      return [1, 2, 2.5, 5, 10].map((m) => m * mag).find((step) => step >= raw) || mag * 10;
+    }
+
+    function shortMonth(value) {
+      const parts = String(value || "").split("-");
+      const parsed = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, 1));
+      if (Number.isNaN(parsed.getTime())) return value || "";
+      const label = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(parsed);
+      return Number(parts[1]) === 1 ? `${label} ${parts[0].slice(2)}` : label;
+    }
+
+    function barColor(row) {
+      if (row.income_missing) return CHART.missing;
+      return row.saved < 0 ? CHART.overspent : CHART.saved;
+    }
+
+    function renderChart() {
+      const svg = els.savingsChart;
+      svg.replaceChildren();
+      hideTip();
+
+      const rows = (dashboard.savings && dashboard.savings.history) || [];
+      if (!rows.length) return;
+
+      const width = Math.max(320, Math.round(svg.parentElement.clientWidth || 720));
+      svg.setAttribute("viewBox", `0 0 ${width} ${CHART.h}`);
+      svg.setAttribute("height", CHART.h);
+
+      // A hatch marks bars that are not a settled full month.
+      const defs = svgEl("defs");
+      const pattern = svgEl("pattern", {
+        id: "partialHatch", width: 6, height: 6,
+        patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)"
+      });
+      pattern.append(svgEl("rect", { width: 6, height: 6, fill: "var(--surface)", "fill-opacity": "0.55" }));
+      pattern.append(svgEl("rect", { width: 2.5, height: 6, fill: "var(--surface)", "fill-opacity": "0.9" }));
+      defs.append(pattern);
+      svg.append(defs);
+
+      const plotW = width - CHART.left - CHART.right;
+      const plotH = CHART.h - CHART.top - CHART.bottom;
+      const values = rows.map((row) => row.saved);
+      const rawMax = Math.max(0, ...values);
+      const rawMin = Math.min(0, ...values);
+      const step = niceStep(rawMax - rawMin || Math.abs(rawMax) || 1);
+      const max = Math.ceil(rawMax / step) * step;
+      const min = Math.floor(rawMin / step) * step;
+      const span = (max - min) || 1;
+      const yOf = (value) => CHART.top + plotH - ((value - min) / span) * plotH;
+
+      // Recessive gridlines, with the zero line a touch stronger.
+      for (let value = min; value <= max + 1e-6; value += step) {
+        const y = yOf(value);
+        const isZero = Math.abs(value) < 1e-6;
+        svg.append(svgEl("line", {
+          x1: CHART.left, x2: width - CHART.right, y1: y, y2: y,
+          stroke: isZero ? "var(--line)" : "var(--row-line)",
+          "stroke-width": isZero ? 1.5 : 1
+        }));
+        const label = svgEl("text", {
+          x: CHART.left - 10, y: y + 4, "text-anchor": "end",
+          fill: "var(--muted)", "font-size": "11"
+        });
+        label.textContent = money.format(value);
+        svg.append(label);
+      }
+
+      const slot = plotW / rows.length;
+      const barW = Math.max(6, Math.min(CHART.maxBar, slot - CHART.gap));
+      const zeroY = yOf(0);
+
+      rows.forEach((row, index) => {
+        const x = CHART.left + index * slot + (slot - barW) / 2;
+        const valueY = yOf(row.saved);
+        const up = row.saved >= 0;
+        const top = up ? valueY : zeroY;
+        const height = Math.max(1, Math.abs(valueY - zeroY));
+        const color = barColor(row);
+
+        const group = svgEl("g", { class: "chart-bar" });
+        group.append(svgEl("path", { d: barPath(x, top, barW, height, CHART.radius, up), fill: color }));
+        if (row.partial) {
+          group.append(svgEl("path", {
+            d: barPath(x, top, barW, height, CHART.radius, up), fill: "url(#partialHatch)"
+          }));
+        }
+
+        const hit = svgEl("rect", {
+          x: CHART.left + index * slot, y: CHART.top,
+          width: slot, height: plotH, fill: "transparent"
+        });
+        const title = svgEl("title");
+        title.textContent = `${shortMonth(row.month)}: ${money.format(row.saved)}`;
+        hit.append(title);
+        hit.addEventListener("mouseenter", () => showTip(row, CHART.left + index * slot + slot / 2, Math.min(top, zeroY)));
+        hit.addEventListener("mouseleave", hideTip);
+        group.append(hit);
+        svg.append(group);
+
+        // Drop every other label when the bars get too close to read.
+        const sparse = slot < CHART.minSlotForLabel;
+        if (!sparse || index % 2 === rows.length % 2) {
+          const label = svgEl("text", {
+            x: x + barW / 2, y: CHART.h - 8, "text-anchor": "middle",
+            fill: "var(--muted)", "font-size": "11"
+          });
+          label.textContent = shortMonth(row.month);
+          svg.append(label);
+        }
+      });
+
+      renderChartTable(rows);
+    }
+
+    function showTip(row, x, y) {
+      const note = row.income_missing
+        ? '<div class="tip-note">No income recorded</div>'
+        : (row.partial ? '<div class="tip-note">Month still in progress</div>' : "");
+      els.chartTip.innerHTML =
+        `<div class="tip-month">${shortMonth(row.month)}</div>` +
+        `<div class="tip-row">Income <b>${money.format(row.income)}</b></div>` +
+        `<div class="tip-row">Spending <b>${money.format(row.spending)}</b></div>` +
+        `<div class="tip-row">Saved <b>${money.format(row.saved)}</b></div>` + note;
+      els.chartTip.hidden = false;
+      const wrapW = els.savingsChart.parentElement.clientWidth;
+      const tipW = els.chartTip.offsetWidth;
+      // Keep the tooltip inside the panel at the ends of the axis.
+      const clamped = Math.max(tipW / 2 + 4, Math.min(x, wrapW - tipW / 2 - 4));
+      els.chartTip.style.left = `${clamped}px`;
+      els.chartTip.style.top = `${Math.max(tipW ? 34 : 0, y - 10)}px`;
+    }
+
+    function hideTip() {
+      els.chartTip.hidden = true;
+    }
+
+    function renderChartTable(rows) {
+      const body = rows.map((row) => {
+        const note = row.income_missing ? " (no income recorded)" : (row.partial ? " (in progress)" : "");
+        return `<tr><td>${shortMonth(row.month)}${note}</td><td>${money.format(row.income)}</td>` +
+          `<td>${money.format(row.spending)}</td><td>${money.format(row.saved)}</td></tr>`;
+      }).join("");
+      els.chartTable.innerHTML =
+        "<table><thead><tr><th>Month</th><th>Income</th><th>Spending</th><th>Saved</th></tr></thead>" +
+        `<tbody>${body}</tbody></table>`;
+    }
+
+    function toggleChartTable() {
+      const showing = els.chartTable.hidden;
+      els.chartTable.hidden = !showing;
+      els.chartTableButton.setAttribute("aria-expanded", String(showing));
+    }
+
     function render() {
       renderSummary();
+      renderChart();
       renderTransactions();
       renderAccounts();
     }
@@ -1223,6 +1525,13 @@ HTML = """<!doctype html>
 
     els.refreshButton.addEventListener("click", loadDashboard);
     els.reprintButton.addEventListener("click", reprintNow);
+    els.chartTableButton.addEventListener("click", toggleChartTable);
+    let resizeTimer = null;
+    window.addEventListener("resize", () => {
+      if (!dashboard) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(renderChart, 150);
+    });
     els.budgetEditButton.addEventListener("click", startBudgetEdit);
     els.budgetInput.addEventListener("blur", saveBudget);
     els.budgetInput.addEventListener("keydown", (event) => {

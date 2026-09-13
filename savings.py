@@ -6,10 +6,14 @@ so the savings picture stays an unedited record of what actually moved.
 """
 
 import calendar
+import os
 import re
 from datetime import date, datetime
 
 import config
+
+# How many months the savings chart covers, current month included.
+HISTORY_MONTHS = max(1, int(os.environ.get("SAVINGS_HISTORY_MONTHS", "12")))
 
 
 def _transaction_date(transaction: dict) -> date | None:
@@ -48,12 +52,34 @@ def card_context(accounts: list[dict] | None) -> tuple[set[str], tuple[str, ...]
     return ids, tuple(names)
 
 
+def off_budget_ids(accounts: list[dict] | None) -> set[str]:
+    """Ids of accounts outside the budget, such as a brokerage.
+
+    Their movements are not household income or spending, and their
+    reconciliation adjustments would otherwise read as enormous income.
+    """
+    if not accounts:
+        return set()
+    return {
+        account["id"]
+        for account in accounts
+        if account.get("id") and account.get("on_budget") is False
+    }
+
+
 # Wording banks use for a card payoff. Anything else arriving on a card is
 # treated as a refund, so a genuine payment is never mistaken for one.
 _PAYMENT_WORDS = ("payment", "thank you", "autopay", "auto pay", "bill pay")
 
 # How far back a refund may reach to find the purchase it reverses.
 REFUND_MATCH_DAYS = 120
+
+# YNAB bookkeeping rather than money moving in or out.
+_ADJUSTMENT_WORDS = ("balance adjustment", "starting balance", "reconciliation")
+
+# Movement between the user's own accounts that the bank imported as an ordinary
+# transaction, so YNAB never linked it as a transfer.
+_TRANSFER_WORDS = ("transfer",)
 
 
 def _is_card_payoff_inflow(transaction: dict, card_names: tuple[str, ...]) -> bool:
@@ -144,12 +170,22 @@ def _apply_refund(
     return applied
 
 
+def _is_internal_movement(transaction: dict) -> bool:
+    """True for bookkeeping entries and unlinked transfers between own accounts."""
+    payee = _normalize_name(transaction.get("payee_name"))
+    if not payee:
+        return False
+    return any(word in payee for word in _ADJUSTMENT_WORDS + _TRANSFER_WORDS)
+
+
 def _counts_as_cash_flow(transaction: dict) -> bool:
     if transaction.get("deleted"):
         return False
     # Transfers move money between the user's own accounts. A credit card
     # payment would otherwise register as income and spending at once.
     if transaction.get("transfer_account_id"):
+        return False
+    if _is_internal_movement(transaction):
         return False
     return not _is_excluded_payee(transaction)
 
@@ -183,6 +219,7 @@ def cash_flow_by_month(
     purchase look worse than it was.
     """
     card_ids, card_names = card_context(accounts)
+    ignored_ids = off_budget_ids(accounts)
     rows = _eligible_rows(transactions)
 
     income: dict[tuple[int, int], int] = {}
@@ -191,6 +228,9 @@ def cash_flow_by_month(
     refunds: list[tuple[date, str, int, str | None]] = []
 
     for row_date, transaction in rows:
+        if transaction.get("account_id") in ignored_ids:
+            continue
+
         key = (row_date.year, row_date.month)
         amount = transaction.get("amount", 0) or 0
         payee = _normalize_name(transaction.get("payee_name"))
@@ -214,6 +254,10 @@ def cash_flow_by_month(
             # Money landing on a card is a payoff or a refund, never income.
             if not _is_card_payoff_inflow(transaction, card_names):
                 refunds.append((row_date, payee, amount, account_id))
+            continue
+
+        # Money arriving with a card's name on it is card business, not pay.
+        if _is_card_payment(transaction, card_names):
             continue
 
         # An inflow elsewhere is income unless it reverses an earlier purchase
@@ -246,20 +290,69 @@ def month_cash_flow(
 
 def previous_month(today: date) -> tuple[int, int]:
     """Returns (year, month) for the month before the one containing today."""
-    previous = date.fromordinal(today.replace(day=1).toordinal() - 1)
-    return previous.year, previous.month
+    return shift_month(today.year, today.month, -1)
 
 
-def savings_since_date(today: date) -> str:
-    """Returns the YNAB since_date covering last month through today."""
-    year, month = previous_month(today)
+def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    """Returns (year, month) delta months away, normalized across year ends."""
+    index = year * 12 + (month - 1) + delta
+    return index // 12, index % 12 + 1
+
+
+def savings_since_date(today: date, months_back: int = 1) -> str:
+    """Returns the YNAB since_date covering months_back months before today."""
+    year, month = shift_month(today.year, today.month, -months_back)
     return date(year, month, 1).isoformat()
+
+
+def history_since_date(today: date) -> str:
+    """Returns the YNAB since_date covering the whole savings chart window."""
+    return savings_since_date(today, months_back=HISTORY_MONTHS - 1)
+
+
+def _history_rows(
+    by_month: dict[tuple[int, int], tuple[float, float]],
+    today: date,
+    history_months: int,
+) -> list[dict]:
+    """One row per month, oldest first, ending with the current month.
+
+    Savings here is the true net, negative included, because the point of the
+    chart is the shape over time. The tiles keep their own zero floor.
+
+    Leading months with no activity at all are dropped so a budget that started
+    part way through the window does not render as flat zero bars. Interior gaps
+    stay, since a quiet month between two active ones is real.
+    """
+    rows = []
+    for offset in range(history_months - 1, -1, -1):
+        year, month = shift_month(today.year, today.month, -offset)
+        income, spending = by_month.get((year, month), (0.0, 0.0))
+        rows.append(
+            {
+                "month": f"{year:04d}-{month:02d}",
+                "income": income,
+                "spending": spending,
+                "saved": income - spending,
+                "partial": offset == 0,
+                # Spending with nothing on record as income is a gap in the
+                # data, not a month of pure overspending.
+                "income_missing": not income and spending > 0,
+            }
+        )
+
+    first_active = next(
+        (i for i, row in enumerate(rows) if row["income"] or row["spending"]),
+        len(rows) - 1,
+    )
+    return rows[first_active:]
 
 
 def savings_summary(
     transactions: list[dict],
     today: date | None = None,
     accounts: list[dict] | None = None,
+    history_months: int | None = None,
 ) -> dict:
     """Returns last month's savings and this month's projected savings.
 
@@ -298,4 +391,9 @@ def savings_summary(
         },
         "saved_last_month": saved_last_month,
         "projected_savings": projected_saved,
+        "history": _history_rows(
+            by_month,
+            today,
+            history_months if history_months is not None else HISTORY_MONTHS,
+        ),
     }
