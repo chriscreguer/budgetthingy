@@ -15,6 +15,10 @@ import config
 # How many months the savings chart covers, current month included.
 HISTORY_MONTHS = max(1, int(os.environ.get("SAVINGS_HISTORY_MONTHS", "12")))
 
+# Never chart earlier than this. The budget is new and months before it have
+# income missing, so those bars are noise rather than history.
+HISTORY_START = os.environ.get("SAVINGS_HISTORY_START", "2026-06")
+
 
 def _transaction_date(transaction: dict) -> date | None:
     try:
@@ -314,6 +318,7 @@ def _history_rows(
     by_month: dict[tuple[int, int], tuple[float, float]],
     today: date,
     history_months: int,
+    start_month: str = "",
 ) -> list[dict]:
     """One row per month, oldest first, ending with the current month.
 
@@ -327,6 +332,9 @@ def _history_rows(
     rows = []
     for offset in range(history_months - 1, -1, -1):
         year, month = shift_month(today.year, today.month, -offset)
+        label = f"{year:04d}-{month:02d}"
+        if start_month and label < start_month:
+            continue
         income, spending = by_month.get((year, month), (0.0, 0.0))
         rows.append(
             {
@@ -395,5 +403,6 @@ def savings_summary(
             by_month,
             today,
             history_months if history_months is not None else HISTORY_MONTHS,
+            "" if history_months is not None else HISTORY_START,
         ),
     }
