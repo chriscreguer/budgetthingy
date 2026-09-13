@@ -211,3 +211,82 @@ def test_snapshot_hides_matched_provisional_even_with_manual_override():
     assert snapshot["spent"] == 2012.34
     assert snapshot["counts"]["total"] == 9
     assert "prov-target" not in {line["line_id"] for line in snapshot["transactions"]}
+
+
+def test_store_budget_overrides_flexible_budget_env():
+    with patch(
+        "budget_pace.requests.get",
+        side_effect=[
+            _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_TRANSACTIONS_RESPONSE),
+        ],
+    ), \
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 1200.0), \
+         patch("budget_pace.config.EXCLUDED_PAYEE_PATTERNS", ("withdrawal",)):
+        snapshot = fetch_budget_snapshot({"budget": {"monthly": 2000.0}})
+
+    assert snapshot["assigned"] == 2000.0
+    assert snapshot["budget_source"] == "app"
+
+
+def test_flexible_budget_env_is_the_fallback_when_store_is_empty():
+    with patch(
+        "budget_pace.requests.get",
+        side_effect=[
+            _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_TRANSACTIONS_RESPONSE),
+        ],
+    ), \
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 1200.0), \
+         patch("budget_pace.config.EXCLUDED_PAYEE_PATTERNS", ("withdrawal",)):
+        snapshot = fetch_budget_snapshot({})
+
+    assert snapshot["assigned"] == 1200.0
+    assert snapshot["budget_source"] == "env"
+
+
+def test_ynab_budgeted_total_is_the_last_fallback():
+    snapshot = _patched_snapshot()
+
+    assert snapshot["assigned"] == 1925.0
+    assert snapshot["budget_source"] == "ynab"
+
+
+def test_zero_store_budget_falls_back_to_ynab():
+    with patch(
+        "budget_pace.requests.get",
+        side_effect=[
+            _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_TRANSACTIONS_RESPONSE),
+        ],
+    ), \
+         patch("budget_pace.config.FLEXIBLE_BUDGET", 0.0), \
+         patch("budget_pace.config.EXCLUDED_PAYEE_PATTERNS", ("withdrawal",)):
+        snapshot = fetch_budget_snapshot({"budget": {"monthly": 0}})
+
+    assert snapshot["assigned"] == 1925.0
+    assert snapshot["budget_source"] == "ynab"
+
+
+def test_snapshot_exposes_savings_fields():
+    snapshot = _patched_snapshot()
+
+    assert "saved_last_month" in snapshot
+    assert "projected_savings" in snapshot
+    assert snapshot["saved_last_month"] >= 0.0
+    assert snapshot["projected_savings"] >= 0.0
+    assert set(snapshot["savings"]) == {"last_month", "this_month"}
+
+
+def test_savings_ignore_manual_overrides():
+    transactions_response = deepcopy(MOCK_TRANSACTIONS_RESPONSE)
+    transactions_response["data"]["transactions"][0]["id"] = "tx-flex"
+
+    baseline = _patched_snapshot(transactions_response=transactions_response)
+    overridden = _patched_snapshot(
+        {"transactions": {"tx-flex": {"decision": "exclude"}}},
+        transactions_response,
+    )
+
+    assert overridden["spent"] != baseline["spent"]
+    assert overridden["savings"] == baseline["savings"]

@@ -14,6 +14,7 @@ from transaction_overrides import (
     record_provisional_attempt,
     record_provisional_transaction,
     record_reprint,
+    set_budget,
     set_decision,
 )
 
@@ -64,13 +65,15 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
-        protected_paths = {"/api/overrides", "/api/provisional-transaction", "/api/reprint"}
+        protected_paths = {"/api/overrides", "/api/budget", "/api/provisional-transaction", "/api/reprint"}
         if path in protected_paths and not self._authorized(parsed):
             self._send_json(401, {"ok": False, "error": "unauthorized"})
             return
 
         if path == "/api/overrides":
             self._overrides()
+        elif path == "/api/budget":
+            self._budget()
         elif path == "/api/provisional-transaction":
             self._provisional_transaction()
         elif path == "/api/reprint":
@@ -98,6 +101,16 @@ class handler(BaseHTTPRequestHandler):
             payload = self._read_json()
             set_decision(str(payload.get("line_id", "")), str(payload.get("decision", "auto")))
             self._send_json(200, _dashboard_payload())
+        except Exception as exc:
+            self._error(exc)
+
+    def _budget(self) -> None:
+        try:
+            payload = self._read_json()
+            set_budget(payload.get("monthly"))
+            self._send_json(200, _dashboard_payload())
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._error(exc)
 

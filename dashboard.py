@@ -12,6 +12,7 @@ from transaction_overrides import (
     record_provisional_attempt,
     record_provisional_transaction,
     record_reprint,
+    set_budget,
     set_decision,
 )
 
@@ -223,7 +224,7 @@ HTML = """<!doctype html>
     }
     .metrics {
       display: grid;
-      grid-template-columns: repeat(6, minmax(130px, 1fr));
+      grid-template-columns: repeat(8, minmax(118px, 1fr));
       gap: 10px;
       margin-bottom: 14px;
     }
@@ -251,6 +252,44 @@ HTML = """<!doctype html>
       margin-top: 4px;
       color: var(--muted);
       font-size: 12px;
+    }
+    .metric .value.positive { color: var(--accent-strong); }
+    .budget-value {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .budget-edit {
+      height: auto;
+      min-width: 0;
+      padding: 2px 6px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--control);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .budget-edit:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .budget-input {
+      width: 100%;
+      padding: 0;
+      border: none;
+      border-bottom: 1px solid var(--accent);
+      border-radius: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 24px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .budget-input:focus {
+      outline: none;
+      border-bottom-color: var(--accent-strong);
     }
     .status {
       min-height: 22px;
@@ -516,6 +555,7 @@ HTML = """<!doctype html>
         margin-top: 5px;
         font-size: 18px;
       }
+      .budget-input { font-size: 18px; }
       .metric .note {
         margin-top: 2px;
         font-size: 11px;
@@ -726,8 +766,18 @@ HTML = """<!doctype html>
       <div class="metric"><div class="label">State</div><div class="value" id="stateValue">-</div><div class="note" id="paceNote">-</div></div>
       <div class="metric"><div class="label">Spent</div><div class="value" id="spentValue">-</div><div class="note" id="countNote">-</div></div>
       <div class="metric"><div class="label">Expected</div><div class="value" id="expectedValue">-</div><div class="note" id="dayNote">-</div></div>
-      <div class="metric"><div class="label">Assigned</div><div class="value" id="assignedValue">-</div><div class="note">Monthly budget</div></div>
+      <div class="metric">
+        <div class="label">Assigned</div>
+        <div class="value budget-value">
+          <span id="assignedValue">-</span>
+          <button type="button" class="budget-edit" id="budgetEditButton" aria-label="Edit monthly budget" title="Edit monthly budget">Edit</button>
+          <input type="number" class="budget-input" id="budgetInput" min="0" step="10" inputmode="decimal" aria-label="Monthly budget" hidden>
+        </div>
+        <div class="note" id="budgetNote">Monthly budget</div>
+      </div>
       <div class="metric"><div class="label">Remaining</div><div class="value" id="remainingValue">-</div><div class="note">Month total</div></div>
+      <div class="metric"><div class="label">Saved Last Month</div><div class="value" id="savedLastMonthValue">-</div><div class="note" id="savedLastMonthNote">-</div></div>
+      <div class="metric"><div class="label">Projected Savings</div><div class="value" id="projectedSavingsValue">-</div><div class="note" id="projectedSavingsNote">-</div></div>
       <div class="metric"><div class="label">Overrides</div><div class="value" id="overrideValue">-</div><div class="note" id="reprintNote">No reprint yet</div></div>
     </section>
     <section class="pace-panel" aria-label="Budget progress">
@@ -809,7 +859,14 @@ HTML = """<!doctype html>
       expectedValue: document.getElementById("expectedValue"),
       dayNote: document.getElementById("dayNote"),
       assignedValue: document.getElementById("assignedValue"),
+      budgetEditButton: document.getElementById("budgetEditButton"),
+      budgetInput: document.getElementById("budgetInput"),
+      budgetNote: document.getElementById("budgetNote"),
       remainingValue: document.getElementById("remainingValue"),
+      savedLastMonthValue: document.getElementById("savedLastMonthValue"),
+      savedLastMonthNote: document.getElementById("savedLastMonthNote"),
+      projectedSavingsValue: document.getElementById("projectedSavingsValue"),
+      projectedSavingsNote: document.getElementById("projectedSavingsNote"),
       overrideValue: document.getElementById("overrideValue"),
       reprintNote: document.getElementById("reprintNote"),
       clearanceNote: document.getElementById("clearanceNote"),
@@ -1000,8 +1057,10 @@ HTML = """<!doctype html>
       els.expectedValue.textContent = money.format(dashboard.expected);
       els.dayNote.textContent = `Day ${dashboard.day} of ${dashboard.days_in_month}`;
       els.assignedValue.textContent = money.format(dashboard.assigned);
+      els.budgetNote.textContent = budgetNoteText();
       els.remainingValue.textContent = money.format(dashboard.remaining);
       els.overrideValue.textContent = dashboard.counts.overridden;
+      renderSavings();
       if (dashboard.reprint && dashboard.reprint.requested_at) {
         els.reprintNote.textContent = dashboard.reprint.requested_at.replace("T", " ").slice(0, 19);
       } else {
@@ -1018,6 +1077,83 @@ HTML = """<!doctype html>
       els.progressExpectedLabel.textContent = `${money.format(dashboard.expected)} expected`;
       els.progressAssignedLabel.textContent = `${money.format(dashboard.assigned)} assigned`;
       els.clearanceNote.textContent = clearanceText();
+    }
+
+    const monthName = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" });
+
+    function monthLabel(value) {
+      const parts = String(value || "").split("-");
+      if (parts.length < 2) return "Last month";
+      const parsed = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, 1));
+      return Number.isNaN(parsed.getTime()) ? "Last month" : monthName.format(parsed);
+    }
+
+    function budgetNoteText() {
+      if (dashboard.budget_source === "env") return "From FLEXIBLE_BUDGET";
+      if (dashboard.budget_source === "ynab") return "YNAB assigned total";
+      return "Monthly budget";
+    }
+
+    function renderSavings() {
+      const savings = dashboard.savings || {};
+      const lastMonth = savings.last_month || {};
+      const thisMonth = savings.this_month || {};
+
+      const saved = dashboard.saved_last_month || 0;
+      els.savedLastMonthValue.textContent = money.format(saved);
+      els.savedLastMonthValue.classList.toggle("positive", saved > 0);
+      els.savedLastMonthNote.textContent = lastMonth.income === undefined
+        ? "-"
+        : `${monthLabel(lastMonth.month)}: ${money.format(lastMonth.income)} in \u2212 ${money.format(lastMonth.spending)} out`;
+
+      const projected = dashboard.projected_savings || 0;
+      els.projectedSavingsValue.textContent = money.format(projected);
+      els.projectedSavingsValue.classList.toggle("positive", projected > 0);
+      els.projectedSavingsNote.textContent = thisMonth.projected_spending === undefined
+        ? "-"
+        : `${money.format(thisMonth.projected_income)} in \u2212 ${money.format(thisMonth.projected_spending)} projected out`;
+    }
+
+    function startBudgetEdit() {
+      if (!dashboard) return;
+      els.budgetInput.value = String(Math.round((dashboard.assigned || 0) * 100) / 100);
+      els.budgetInput.hidden = false;
+      els.assignedValue.hidden = true;
+      els.budgetEditButton.hidden = true;
+      els.budgetInput.focus();
+      els.budgetInput.select();
+    }
+
+    function stopBudgetEdit() {
+      els.budgetInput.hidden = true;
+      els.assignedValue.hidden = false;
+      els.budgetEditButton.hidden = false;
+    }
+
+    async function saveBudget() {
+      const raw = els.budgetInput.value.trim();
+      stopBudgetEdit();
+      if (raw === "") return;
+
+      const amount = Number(raw);
+      if (!Number.isFinite(amount) || amount < 0) {
+        setStatus("Budget must be a number of zero or more.", true);
+        return;
+      }
+      if (amount === dashboard.assigned) return;
+
+      setStatus("Saving budget...");
+      try {
+        dashboard = await fetchJson("/api/budget", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ monthly: amount })
+        });
+        render();
+        setStatus(`Budget set to ${money.format(dashboard.assigned)} per month.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
     }
 
     function render() {
@@ -1087,6 +1223,18 @@ HTML = """<!doctype html>
 
     els.refreshButton.addEventListener("click", loadDashboard);
     els.reprintButton.addEventListener("click", reprintNow);
+    els.budgetEditButton.addEventListener("click", startBudgetEdit);
+    els.budgetInput.addEventListener("blur", saveBudget);
+    els.budgetInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        els.budgetInput.blur();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        els.budgetInput.value = "";
+        stopBudgetEdit();
+      }
+    });
     els.searchInput.addEventListener("input", renderTransactions);
     els.filterSelect.addEventListener("change", renderTransactions);
     loadDashboard();
@@ -1153,6 +1301,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/overrides":
                 payload = self._read_json()
                 set_decision(str(payload.get("line_id", "")), str(payload.get("decision", "auto")))
+                self._send_json(200, _dashboard_payload())
+            elif path == "/api/budget":
+                payload = self._read_json()
+                set_budget(payload.get("monthly"))
                 self._send_json(200, _dashboard_payload())
             elif path == "/api/provisional-transaction":
                 payload = self._read_json()

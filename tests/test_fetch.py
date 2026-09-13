@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from budget_pace import fetch_flexible_totals
+from savings import savings_since_date
 
 
 THIS_MONTH = date.today().replace(day=2).isoformat()
@@ -189,7 +190,9 @@ def test_uses_correct_url_and_headers():
     category_call, transaction_call = mock_get.call_args_list
     assert "bud-xyz" in category_call[0][0]
     assert "bud-xyz" in transaction_call[0][0]
-    assert transaction_call[1]["params"]["since_date"] == date.today().replace(day=1).isoformat()
+    # The window reaches back to the start of last month so the same response
+    # can feed the savings figures.
+    assert transaction_call[1]["params"]["since_date"] == savings_since_date(date.today())
     assert category_call[1]["headers"]["Authorization"] == "Bearer tok-abc"
     assert transaction_call[1]["headers"]["Authorization"] == "Bearer tok-abc"
 

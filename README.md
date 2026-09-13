@@ -41,7 +41,16 @@ By default, the display counts current-month YNAB outflows across every category
 
 Use `EXCLUDED_PAYEE_PATTERNS` for bank/card movement that YNAB imports as a normal transaction instead of a transfer. Matching is case-insensitive substring matching, so `Withdrawal` excludes payees like `Withdrawal`.
 
-When `FLEXIBLE_BUDGET` is greater than zero, that fixed amount is used instead of summing visible YNAB budgeted amounts.
+The monthly budget is resolved in this order:
+
+1. The budget set in the dashboard (stored in the app store, shared by the local
+   and hosted dashboards).
+2. `FLEXIBLE_BUDGET`, when greater than zero.
+3. The sum of visible YNAB budgeted amounts.
+
+Editing the budget in the dashboard writes to the app store, so it survives
+restarts and applies to the e-paper frame at the next wake. `FLEXIBLE_BUDGET`
+remains the fallback for a fresh instance with nothing saved.
 
 ## Endpoints
 
@@ -60,6 +69,40 @@ Returns JSON metadata for debugging the same generated frame:
 ```json
 {"ok": true, "path": "budget.bin", "bytes": 53856}
 ```
+
+```text
+POST /api/budget?key=<DASHBOARD_KEY>
+```
+
+Sets the monthly budget and returns the refreshed dashboard payload. Expected
+JSON:
+
+```json
+{"monthly": 2000}
+```
+
+Zero clears the app budget and falls back to `FLEXIBLE_BUDGET`, then to YNAB
+budgeted totals. Negative or non-numeric amounts return `400`.
+
+```text
+POST /api/provisional-transaction?key=<DASHBOARD_KEY>
+```
+
+Stores an Apple Wallet/Citi alert transaction in the app store so the dashboard
+and e-paper frame count it immediately. Expected JSON:
+
+```json
+{
+  "source": "apple_wallet",
+  "merchant": "Target",
+  "amount": "42.19",
+  "card": "Apple Card",
+  "occurred_at": "2026-08-27T17:12:00-05:00"
+}
+```
+
+The app keeps the raw payload, normalizes the amount to milliunits, and hides the
+provisional row from spending totals once a matching YNAB transaction appears.
 
 ## Local Dashboard
 
@@ -82,6 +125,24 @@ or Exclude. Manual decisions are saved locally in:
 ```text
 data/transaction_overrides.json
 ```
+
+The `Assigned` tile is editable: click `Edit`, type a new monthly budget, and
+press Enter (Escape cancels).
+
+Two savings tiles sit beside it:
+
+- **Saved Last Month** - last month's income minus last month's spending,
+  floored at zero.
+- **Projected Savings** - last month's income minus this month's spending
+  extrapolated from the run rate so far, floored at zero.
+
+Both figures come straight from YNAB. They deliberately ignore manual
+Include/Exclude overrides, and they skip transfers and `EXCLUDED_PAYEE_PATTERNS`
+so a credit card payment is not counted as income and spending at once. Income
+is taken from last month rather than extrapolated, because paychecks arrive in
+lumps and a day-of-month projection swings wildly. Projected spending is a
+straight linear run rate, so it reads high early in a month whose fixed costs
+have not posted yet.
 
 The purchase table includes current-month YNAB outflows across all accounts and category states.
 Deleted transactions, inflows, and zero/positive lines are omitted. The pace total
@@ -141,9 +202,16 @@ frame/token, but it cannot wake a sleeping ESP32 on demand.
 After that hosted firmware is flashed, the display only needs power and Wi-Fi;
 the Mac dashboard server does not need to be running.
 
+## Future Transaction Sources
+
+See [docs/provisional-transactions.md](docs/provisional-transactions.md) for the
+Apple Wallet/Citi alert path for provisional pending transactions, including
+webhook.site testing, app endpoint design, reconciliation with YNAB, and the
+future smart plug trigger.
+
 ## Local Checks
 
 ```bash
 python -m pytest -q
-python -m py_compile api/index.py api/generate.py api/display.py dashboard.py
+python -m py_compile api/index.py api/generate.py api/display.py dashboard.py savings.py
 ```

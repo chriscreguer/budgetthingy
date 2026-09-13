@@ -10,6 +10,7 @@ from datetime import date, datetime
 import requests
 
 import config
+import savings
 from convert_image import convert
 
 _WIDTH = 792
@@ -133,6 +134,35 @@ def _override_decision(overrides: dict | None, line_id: str) -> str:
     return "auto"
 
 
+def _store_budget(overrides: dict | None) -> float | None:
+    """Returns the monthly budget saved in the app, or None when unset."""
+    if not isinstance(overrides, dict):
+        return None
+    budget = overrides.get("budget")
+    if not isinstance(budget, dict):
+        return None
+    monthly = budget.get("monthly")
+    if monthly is None:
+        return None
+    try:
+        return float(monthly)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_assigned(
+    overrides: dict | None,
+    budget_categories: list[dict],
+) -> tuple[float, str]:
+    """Returns (assigned_dollars, source) from app budget, env var, then YNAB."""
+    stored = _store_budget(overrides)
+    if stored is not None and stored > 0:
+        return stored, "app"
+    if config.FLEXIBLE_BUDGET > 0:
+        return config.FLEXIBLE_BUDGET, "env"
+    return _milliunits_to_dollars(sum(c["budgeted"] for c in budget_categories)), "ynab"
+
+
 def _store_provisional_transactions(overrides: dict | None) -> dict:
     if not isinstance(overrides, dict):
         return {}
@@ -225,7 +255,9 @@ def _fetch_ynab_category_groups(headers: dict[str, str]) -> list[dict]:
 
 
 def _fetch_ynab_transactions(headers: dict[str, str], today: date) -> list[dict]:
-    since_date = today.replace(day=1).isoformat()
+    # Reaches back to the start of last month so the savings figures can be
+    # computed from the same response the pace math already needs.
+    since_date = savings.savings_since_date(today)
     transactions_url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/transactions"
     transactions_resp = requests.get(
         transactions_url,
@@ -550,11 +582,8 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
         reverse=True,
     )
     spent = sum(line["amount"] for line in lines if line["included"])
-    assigned = (
-        config.FLEXIBLE_BUDGET
-        if config.FLEXIBLE_BUDGET > 0
-        else _milliunits_to_dollars(sum(c["budgeted"] for c in budget_categories))
-    )
+    assigned, budget_source = _resolve_assigned(overrides, budget_categories)
+    savings_summary = savings.savings_summary(transactions, today)
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     pace_ratio, state_label, expected = calculate_pace(
         assigned,
@@ -597,7 +626,14 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
         "day": today.day,
         "days_in_month": days_in_month,
         "assigned": assigned,
+        "budget_source": budget_source,
         "spent": spent,
+        "saved_last_month": savings_summary["saved_last_month"],
+        "projected_savings": savings_summary["projected_savings"],
+        "savings": {
+            "last_month": savings_summary["last_month"],
+            "this_month": savings_summary["this_month"],
+        },
         "expected": expected,
         "remaining": assigned - spent,
         "pace": pace_ratio,

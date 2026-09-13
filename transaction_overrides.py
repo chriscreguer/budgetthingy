@@ -24,6 +24,7 @@ def _now() -> str:
 def _empty_store() -> dict:
     return {
         "version": 1,
+        "budget": {},
         "transactions": {},
         "provisional_transactions": {},
         "provisional_attempts": [],
@@ -33,6 +34,7 @@ def _empty_store() -> dict:
 
 def _normalize_store(store: dict) -> dict:
     store.setdefault("version", 1)
+    store.setdefault("budget", {})
     store.setdefault("transactions", {})
     store.setdefault("provisional_transactions", {})
     store.setdefault("provisional_attempts", [])
@@ -128,6 +130,31 @@ def write_store(store: dict, path: str = DEFAULT_STORE_PATH) -> None:
         raise
 
 
+def load_budget(path: str = DEFAULT_STORE_PATH) -> float | None:
+    """Returns the monthly budget set in the app, or None when unset."""
+    budget = load_store(path)["budget"]
+    if not isinstance(budget, dict):
+        return None
+    monthly = budget.get("monthly")
+    if monthly is None:
+        return None
+    try:
+        return float(monthly)
+    except (TypeError, ValueError):
+        return None
+
+
+def set_budget(amount, path: str = DEFAULT_STORE_PATH) -> dict:
+    """Stores the monthly budget in dollars. Zero falls back to YNAB totals."""
+    store = load_store(path)
+    store["budget"] = {
+        "monthly": _parse_budget_dollars(amount),
+        "updated_at": _now(),
+    }
+    write_store(store, path)
+    return store["budget"]
+
+
 def load_overrides(path: str = DEFAULT_STORE_PATH) -> dict:
     return load_store(path)["transactions"]
 
@@ -173,6 +200,25 @@ def _parse_amount_milliunits(value) -> int:
     if milliunits == 0:
         raise ValueError("amount must be non-zero")
     return milliunits
+
+
+def _parse_budget_dollars(value) -> float:
+    if value is None or value == "":
+        raise ValueError("budget amount is required")
+
+    if isinstance(value, str):
+        amount_text = value.strip().replace(",", "").replace("$", "")
+    else:
+        amount_text = str(value)
+
+    try:
+        amount = Decimal(amount_text)
+    except InvalidOperation as exc:
+        raise ValueError("budget must be a number") from exc
+
+    if amount < 0:
+        raise ValueError("budget cannot be negative")
+    return float(amount)
 
 
 def _normalize_occurred_at(value) -> str:

@@ -4,11 +4,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from transaction_overrides import (
+    load_budget,
     load_provisional_attempts,
     load_store,
     record_provisional_attempt,
     record_provisional_transaction,
     record_reprint,
+    set_budget,
     set_decision,
 )
 
@@ -138,3 +140,45 @@ def test_remote_store_uses_upstash_rest_env():
     request = mock_urlopen.call_args[0][0]
     assert request.full_url == "https://redis.example.com"
     assert request.headers["Authorization"] == "Bearer token"
+
+
+def test_budget_defaults_to_none_when_unset(tmp_path):
+    path = str(tmp_path / "overrides.json")
+
+    assert load_budget(path) is None
+
+
+def test_set_budget_persists_monthly_amount(tmp_path):
+    path = str(tmp_path / "overrides.json")
+
+    budget = set_budget(2000, path)
+
+    assert budget["monthly"] == 2000.0
+    assert budget["updated_at"]
+    assert load_budget(path) == 2000.0
+    assert load_store(path)["budget"]["monthly"] == 2000.0
+
+
+def test_set_budget_accepts_formatted_text(tmp_path):
+    path = str(tmp_path / "overrides.json")
+
+    assert set_budget("$2,000.50", path)["monthly"] == 2000.5
+    assert load_budget(path) == 2000.5
+
+
+def test_set_budget_allows_zero_to_fall_back_to_ynab(tmp_path):
+    path = str(tmp_path / "overrides.json")
+
+    set_budget(0, path)
+
+    assert load_budget(path) == 0.0
+
+
+@pytest.mark.parametrize("value", ["", None, "abc", -5, "-12.50"])
+def test_set_budget_rejects_invalid_amounts(tmp_path, value):
+    path = str(tmp_path / "overrides.json")
+
+    with pytest.raises(ValueError):
+        set_budget(value, path)
+
+    assert load_budget(path) is None
