@@ -254,6 +254,15 @@ def _fetch_ynab_category_groups(headers: dict[str, str]) -> list[dict]:
     return categories_resp.json()["data"]["category_groups"]
 
 
+def _fetch_ynab_accounts(headers: dict[str, str]) -> list[dict]:
+    """Account types let the savings math spot credit card payments that the
+    bank imported as ordinary transactions instead of linked YNAB transfers."""
+    url = f"https://api.ynab.com/v1/budgets/{config.BUDGET_ID}/accounts"
+    accounts_resp = requests.get(url, headers=headers, timeout=10)
+    accounts_resp.raise_for_status()
+    return accounts_resp.json()["data"]["accounts"]
+
+
 def _fetch_ynab_transactions(headers: dict[str, str], today: date) -> list[dict]:
     # Reaches back to the start of last month so the savings figures can be
     # computed from the same response the pace math already needs.
@@ -563,6 +572,7 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
     groups = _fetch_ynab_category_groups(headers)
     budget_categories, category_lookup = _category_context(groups)
 
+    accounts = _fetch_ynab_accounts(headers)
     transactions = _fetch_ynab_transactions(headers, today)
     ynab_lines = _transaction_lines(
         transactions,
@@ -583,7 +593,7 @@ def fetch_budget_snapshot(overrides: dict | None = None, today: date | None = No
     )
     spent = sum(line["amount"] for line in lines if line["included"])
     assigned, budget_source = _resolve_assigned(overrides, budget_categories)
-    savings_summary = savings.savings_summary(transactions, today)
+    savings_summary = savings.savings_summary(transactions, today, accounts)
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     pace_ratio, state_label, expected = calculate_pace(
         assigned,

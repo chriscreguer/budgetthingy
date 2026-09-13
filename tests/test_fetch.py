@@ -48,6 +48,15 @@ MOCK_CATEGORIES_RESPONSE = {
     }
 }
 
+MOCK_ACCOUNTS_RESPONSE = {
+    "data": {
+        "accounts": [
+            {"id": "acct-checking", "name": "Share Draft", "type": "checking"},
+            {"id": "acct-card", "name": "Apple\u00a0Card", "type": "creditCard"},
+        ]
+    }
+}
+
 MOCK_TRANSACTIONS_RESPONSE = {
     "data": {
         "transactions": [
@@ -147,6 +156,7 @@ def test_sums_current_month_outflows_without_category_group_filtering():
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(MOCK_TRANSACTIONS_RESPONSE),
         ],
     ), \
@@ -166,6 +176,7 @@ def test_flexible_budget_override():
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(MOCK_TRANSACTIONS_RESPONSE),
         ],
     ), \
@@ -181,13 +192,14 @@ def test_uses_correct_url_and_headers():
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(MOCK_TRANSACTIONS_RESPONSE),
         ],
     ) as mock_get, \
          patch("budget_pace.config.API_TOKEN", "tok-abc"), \
          patch("budget_pace.config.BUDGET_ID", "bud-xyz"):
         fetch_flexible_totals()
-    category_call, transaction_call = mock_get.call_args_list
+    category_call, accounts_call, transaction_call = mock_get.call_args_list
     assert "bud-xyz" in category_call[0][0]
     assert "bud-xyz" in transaction_call[0][0]
     # The window reaches back to the start of last month so the same response
@@ -203,6 +215,7 @@ def test_does_not_require_included_categories_to_fetch_spending():
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(bad_response),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(MOCK_TRANSACTIONS_RESPONSE),
         ],
     ), \

@@ -173,3 +173,126 @@ def test_savings_summary_with_no_transactions():
 def test_savings_since_date_covers_the_start_of_last_month():
     assert savings_since_date(date(2026, 9, 10)) == "2026-08-01"
     assert savings_since_date(date(2026, 1, 15)) == "2025-12-01"
+
+
+CARD_ACCOUNTS = [
+    {"id": "acct-card", "name": "Apple Card", "type": "creditCard"},
+    {"id": "acct-checking", "name": "Share Draft", "type": "checking"},
+    {"id": "acct-savings", "name": "Savings", "type": "savings"},
+]
+
+
+def test_card_payment_imported_as_two_plain_transactions_is_not_cash_flow():
+    # The bank imports a card payment as an inflow onto the card and an outflow
+    # from checking, neither flagged as a YNAB transfer. Counting them inflates
+    # income and double-counts spending already recorded on the card.
+    transactions = [
+        _transaction("2026-08-07", 3_000_000, payee_name="External Deposit COLSA", account_id="acct-checking"),
+        _transaction("2026-08-20", -80_000, payee_name="Jewel-Osco", account_id="acct-card"),
+        _transaction("2026-08-03", 3_796_790, payee_name="Bill Payment", account_id="acct-card"),
+        _transaction("2026-08-04", -3_796_790, payee_name="Apple Card Payment", account_id="acct-checking"),
+    ]
+
+    income, spending = month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)
+
+    assert income == 3000.0
+    assert spending == 80.0
+
+
+def test_inflow_onto_a_credit_card_is_never_income():
+    # A refund lands on the card as an inflow. It is not income either way.
+    transactions = [
+        _transaction("2026-08-03", 45_000, payee_name="Target", account_id="acct-card"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (0.0, 0.0)
+
+
+def test_card_payment_match_survives_non_breaking_space_in_account_name():
+    # The account is named "Apple Card" but the payee uses a plain space.
+    transactions = [
+        _transaction("2026-08-04", -500_000, payee_name="Apple Card Payment", account_id="acct-checking"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (0.0, 0.0)
+
+
+def test_ordinary_spending_from_checking_still_counts():
+    transactions = [
+        _transaction("2026-08-04", -120_000, payee_name="Rent", account_id="acct-checking"),
+        _transaction("2026-08-05", -60_000, payee_name="Jewel-Osco", account_id="acct-card"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (0.0, 180.0)
+
+
+def test_income_into_checking_and_savings_still_counts():
+    transactions = [
+        _transaction("2026-08-07", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-31", 46_840, payee_name="Interest", account_id="acct-savings"),
+    ]
+
+    income, spending = month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)
+
+    assert income == 3046.84
+    assert spending == 0.0
+
+
+def test_cash_flow_without_accounts_keeps_working():
+    # Accounts are optional; without them only YNAB transfer flags are honoured.
+    transactions = [
+        _transaction("2026-08-07", 3_000_000, payee_name="Employer"),
+        _transaction("2026-08-08", -40_000, payee_name="Coffee"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8) == (3000.0, 40.0)
+
+
+def test_savings_summary_threads_accounts_through():
+    transactions = [
+        _transaction("2026-08-03", 5_000_000, payee_name="Bill Payment", account_id="acct-card"),
+        _transaction("2026-08-07", 3_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-10", -1_000_000, payee_name="Rent", account_id="acct-checking"),
+    ]
+
+    summary = savings_summary(transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS)
+
+    assert summary["last_month"]["income"] == 3000.0
+    assert summary["saved_last_month"] == 2000.0
+
+
+def test_refund_onto_a_card_reduces_spending():
+    # A merchant refund lands as an inflow on the card. It is not income, but it
+    # does mean less was actually spent.
+    transactions = [
+        _transaction("2026-08-05", -500_000, payee_name="Guitar Center", account_id="acct-card"),
+        _transaction("2026-08-20", 439_790, payee_name="Guitar Center", account_id="acct-card"),
+    ]
+
+    income, spending = month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)
+
+    assert income == 0.0
+    assert spending == 60.21
+
+
+def test_card_payment_inflow_is_not_treated_as_a_refund():
+    # Payment-shaped payees must never reduce spending, or a card payoff would
+    # wipe out the month's real purchases.
+    for payee in ["Bill Payment", "ONLINE PAYMENT, THANK YOU", "Apple Card", "AutoPay Thank You"]:
+        transactions = [
+            _transaction("2026-08-05", -500_000, payee_name="Jewel-Osco", account_id="acct-card"),
+            _transaction("2026-08-20", 400_000, payee_name=payee, account_id="acct-card"),
+        ]
+
+        income, spending = month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)
+
+        assert income == 0.0, payee
+        assert spending == 500.0, payee
+
+
+def test_refunds_cannot_push_spending_below_zero():
+    transactions = [
+        _transaction("2026-08-20", 400_000, payee_name="Guitar Center", account_id="acct-card"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (0.0, 0.0)

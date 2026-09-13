@@ -2,7 +2,13 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from budget_pace import fetch_budget_snapshot
-from tests.test_fetch import THIS_MONTH, MOCK_CATEGORIES_RESPONSE, MOCK_TRANSACTIONS_RESPONSE, _mock_get
+from tests.test_fetch import (
+    THIS_MONTH,
+    MOCK_ACCOUNTS_RESPONSE,
+    MOCK_CATEGORIES_RESPONSE,
+    MOCK_TRANSACTIONS_RESPONSE,
+    _mock_get,
+)
 
 
 def _patched_snapshot(overrides=None, transactions_response=None):
@@ -10,6 +16,7 @@ def _patched_snapshot(overrides=None, transactions_response=None):
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(transactions_response or MOCK_TRANSACTIONS_RESPONSE),
         ],
     ), \
@@ -218,6 +225,7 @@ def test_store_budget_overrides_flexible_budget_env():
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(MOCK_TRANSACTIONS_RESPONSE),
         ],
     ), \
@@ -234,6 +242,7 @@ def test_flexible_budget_env_is_the_fallback_when_store_is_empty():
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(MOCK_TRANSACTIONS_RESPONSE),
         ],
     ), \
@@ -257,6 +266,7 @@ def test_zero_store_budget_falls_back_to_ynab():
         "budget_pace.requests.get",
         side_effect=[
             _mock_get(MOCK_CATEGORIES_RESPONSE),
+            _mock_get(MOCK_ACCOUNTS_RESPONSE),
             _mock_get(MOCK_TRANSACTIONS_RESPONSE),
         ],
     ), \

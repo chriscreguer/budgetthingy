@@ -136,13 +136,27 @@ Two savings tiles sit beside it:
 - **Projected Savings** - last month's income minus this month's spending
   extrapolated from the run rate so far, floored at zero.
 
-Both figures come straight from YNAB. They deliberately ignore manual
-Include/Exclude overrides, and they skip transfers and `EXCLUDED_PAYEE_PATTERNS`
-so a credit card payment is not counted as income and spending at once. Income
-is taken from last month rather than extrapolated, because paychecks arrive in
-lumps and a day-of-month projection swings wildly. Projected spending is a
-straight linear run rate, so it reads high early in a month whose fixed costs
-have not posted yet.
+Both figures come straight from YNAB and deliberately ignore manual
+Include/Exclude overrides.
+
+Credit card payments are the main thing that would corrupt them, and they arrive
+two ways. Linked YNAB transfers are skipped by their transfer flag. Payments the
+bank imports as two ordinary transactions are caught using account types from
+`/v1/budgets/{id}/accounts`:
+
+- Money landing on a `creditCard` account is never income. It is a payoff when
+  the payee names the card or reads like a payment (`payment`, `thank you`,
+  `autopay`, `bill pay`), and otherwise a refund, which reduces spending.
+- An outflow whose payee names one of those card accounts is a card payoff, not
+  spending, because the purchases were already counted on the card itself.
+
+Account-name matching normalizes whitespace, since YNAB stores names like
+`Apple<nbsp>Card` with a non-breaking space that plain matching misses.
+
+Income is taken from last month rather than extrapolated, because paychecks
+arrive in lumps and a day-of-month projection swings wildly. Projected spending
+is a straight linear run rate, so it reads high early in a month whose fixed
+costs have not posted yet.
 
 The purchase table includes current-month YNAB outflows across all accounts and category states.
 Deleted transactions, inflows, and zero/positive lines are omitted. The pace total
