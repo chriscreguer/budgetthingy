@@ -146,12 +146,24 @@ bank imports as two ordinary transactions are caught using account types from
 
 - Money landing on a `creditCard` account is never income. It is a payoff when
   the payee names the card or reads like a payment (`payment`, `thank you`,
-  `autopay`, `bill pay`), and otherwise a refund, which reduces spending.
+  `autopay`, `bill pay`), and otherwise a refund.
 - An outflow whose payee names one of those card accounts is a card payoff, not
   spending, because the purchases were already counted on the card itself.
 
 Account-name matching normalizes whitespace, since YNAB stores names like
 `Apple<nbsp>Card` with a non-breaking space that plain matching misses.
+
+A refund is booked against the month of the purchase it reverses, not the month
+it arrives, so buying something in one month and returning it the next nets to
+zero instead of making the month of the purchase look worse. A refund matches a
+purchase on the same account, with the same payee, made within
+`REFUND_MATCH_DAYS` (120) before it, most recent first, and can span several
+purchases. Requiring the same account keeps unrelated money with a colliding
+payee apart, such as savings interest earned and credit card interest charged.
+An inflow to a checking or savings account that matches a purchase this way is a
+debit card return, so it reduces spending rather than counting as income.
+Anything left unmatched falls back to the month the refund arrived, which is the
+best available answer when the purchase predates the fetched window.
 
 Income is taken from last month rather than extrapolated, because paychecks
 arrive in lumps and a day-of-month projection swings wildly. Projected spending

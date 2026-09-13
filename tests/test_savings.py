@@ -296,3 +296,109 @@ def test_refunds_cannot_push_spending_below_zero():
     ]
 
     assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (0.0, 0.0)
+
+
+def test_refund_cancels_the_purchase_in_its_original_month():
+    # Speakers bought in August, returned in September. August should not be
+    # punished for a purchase that was reversed.
+    transactions = [
+        _transaction("2026-08-10", 5_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-12", -800_000, payee_name="Guitar Center", account_id="acct-card"),
+        _transaction("2026-09-05", 800_000, payee_name="Guitar Center", account_id="acct-card"),
+    ]
+
+    august = month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)
+    september = month_cash_flow(transactions, 2026, 9, accounts=CARD_ACCOUNTS)
+
+    assert august == (5000.0, 0.0)
+    assert september == (0.0, 0.0)
+
+
+def test_partial_refund_only_cancels_part_of_the_purchase():
+    transactions = [
+        _transaction("2026-08-12", -800_000, payee_name="Guitar Center", account_id="acct-card"),
+        _transaction("2026-09-05", -50_000, payee_name="Jewel-Osco", account_id="acct-card"),
+        _transaction("2026-09-06", 439_790, payee_name="Guitar Center", account_id="acct-card"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)[1] == 360.21
+    assert month_cash_flow(transactions, 2026, 9, accounts=CARD_ACCOUNTS)[1] == 50.0
+
+
+def test_refund_to_checking_is_not_income_and_cancels_its_purchase():
+    transactions = [
+        _transaction("2026-08-12", -120_000, payee_name="Target", account_id="acct-checking"),
+        _transaction("2026-09-04", 120_000, payee_name="Target", account_id="acct-checking"),
+    ]
+
+    august = month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)
+    september = month_cash_flow(transactions, 2026, 9, accounts=CARD_ACCOUNTS)
+
+    assert august == (0.0, 0.0)
+    assert september == (0.0, 0.0)
+
+
+def test_paycheck_is_never_mistaken_for_a_refund():
+    transactions = [
+        _transaction("2026-08-12", -120_000, payee_name="Target", account_id="acct-checking"),
+        _transaction("2026-08-15", 3_000_000, payee_name="External Deposit COLSA", account_id="acct-checking"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS) == (3000.0, 120.0)
+
+
+def test_refund_matches_the_most_recent_prior_purchase_from_that_payee():
+    transactions = [
+        _transaction("2026-08-02", -100_000, payee_name="Guitar Center", account_id="acct-card"),
+        _transaction("2026-09-03", -100_000, payee_name="Guitar Center", account_id="acct-card"),
+        _transaction("2026-09-10", 100_000, payee_name="Guitar Center", account_id="acct-card"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)[1] == 100.0
+    assert month_cash_flow(transactions, 2026, 9, accounts=CARD_ACCOUNTS)[1] == 0.0
+
+
+def test_refund_with_no_matching_purchase_falls_back_to_its_own_month():
+    transactions = [
+        _transaction("2026-09-05", -200_000, payee_name="Jewel-Osco", account_id="acct-card"),
+        _transaction("2026-09-06", 50_000, payee_name="Some Merchant", account_id="acct-card"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 9, accounts=CARD_ACCOUNTS)[1] == 150.0
+
+
+def test_refund_never_attaches_to_a_later_purchase():
+    # A refund cannot reverse a purchase that had not happened yet.
+    transactions = [
+        _transaction("2026-09-02", 100_000, payee_name="Guitar Center", account_id="acct-card"),
+        _transaction("2026-09-20", -100_000, payee_name="Guitar Center", account_id="acct-card"),
+    ]
+
+    assert month_cash_flow(transactions, 2026, 9, accounts=CARD_ACCOUNTS)[1] == 0.0
+
+
+def test_savings_summary_credits_last_month_for_a_refund_received_this_month():
+    transactions = [
+        _transaction("2026-08-01", 4_000_000, payee_name="Employer", account_id="acct-checking"),
+        _transaction("2026-08-12", -900_000, payee_name="Guitar Center", account_id="acct-card"),
+        _transaction("2026-09-05", 900_000, payee_name="Guitar Center", account_id="acct-card"),
+    ]
+
+    summary = savings_summary(transactions, today=date(2026, 9, 10), accounts=CARD_ACCOUNTS)
+
+    assert summary["last_month"]["spending"] == 0.0
+    assert summary["saved_last_month"] == 4000.0
+
+
+def test_refund_must_land_on_the_account_that_paid():
+    # Savings interest earned and credit card interest charged share a payee but
+    # are unrelated money. The earned interest stays income.
+    transactions = [
+        _transaction("2026-08-05", -46_840, payee_name="Interest", account_id="acct-card"),
+        _transaction("2026-08-31", 46_840, payee_name="Interest", account_id="acct-savings"),
+    ]
+
+    income, spending = month_cash_flow(transactions, 2026, 8, accounts=CARD_ACCOUNTS)
+
+    assert income == 46.84
+    assert spending == 46.84
